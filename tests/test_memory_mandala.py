@@ -1,0 +1,91 @@
+import importlib.util
+import json
+from pathlib import Path
+
+
+def load_plugin_api():
+    module_path = Path(__file__).resolve().parents[1] / "dashboard" / "plugin_api.py"
+    spec = importlib.util.spec_from_file_location("memory_mandala_plugin_api", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_compute_memory_genome_is_deterministic_and_categorizes_sources(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "memory").mkdir(parents=True)
+    (home / "skills" / "github" / "code-review").mkdir(parents=True)
+
+    (home / "MEMORY.md").write_text(
+        "User prefers concise answers. Project uses pytest. Never expose API keys.\n",
+        encoding="utf-8",
+    )
+    (home / "USER.md").write_text("Name: Ada\nRole: researcher\n", encoding="utf-8")
+    (home / "memory" / "2026-04-25.md").write_text(
+        "- Learned the dashboard plugin API.\n- Created a memory workflow.\n",
+        encoding="utf-8",
+    )
+    (home / "memory" / "state.json").write_text(
+        json.dumps({"lastChecks": {"email": 123}, "topic": "automation"}),
+        encoding="utf-8",
+    )
+    (home / "skills" / "github" / "code-review" / "SKILL.md").write_text(
+        "---\nname: code-review\n---\n# Code Review\nReview diffs safely.\n",
+        encoding="utf-8",
+    )
+
+    first = api.compute_memory_genome(home)
+    second = api.compute_memory_genome(home)
+
+    assert first["state_hash"] == second["state_hash"]
+    assert first["seed"] == second["seed"]
+    assert first["totals"]["memory_sources"] == 4
+    assert first["totals"]["skills"] == 1
+    assert first["categories"]["preferences"] >= 1
+    assert first["categories"]["safety"] >= 1
+    assert "pytest" in first["keywords"]
+
+
+def test_generate_snapshot_persists_timeline_and_detects_change_reason(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    data_dir = tmp_path / "plugin-data"
+    home.mkdir()
+    (home / "MEMORY.md").write_text("User likes quiet dashboards.\n", encoding="utf-8")
+
+    first = api.generate_snapshot(home=home, data_dir=data_dir, force=True)
+    timeline = api.load_timeline(data_dir)
+
+    assert first["state_hash"]
+    assert first["reason"] == "initial bloom"
+    assert len(timeline["snapshots"]) == 1
+    assert (data_dir / "snapshots" / f"{first['id']}.json").exists()
+
+    repeated = api.generate_snapshot(home=home, data_dir=data_dir, force=False)
+    assert repeated["id"] == first["id"]
+    assert len(api.load_timeline(data_dir)["snapshots"]) == 1
+
+    (home / "USER.md").write_text("Name: Grace\nPrefers precise reports.\n", encoding="utf-8")
+    changed = api.generate_snapshot(home=home, data_dir=data_dir, force=False)
+
+    assert changed["id"] != first["id"]
+    assert "memory state changed" in changed["reason"]
+    assert len(api.load_timeline(data_dir)["snapshots"]) == 2
+
+
+def test_svg_renderer_is_deterministic_for_same_snapshot(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    data_dir = tmp_path / "plugin-data"
+    home.mkdir()
+    (home / "MEMORY.md").write_text("Project uses FastAPI and local-first plugins.\n", encoding="utf-8")
+
+    snapshot = api.generate_snapshot(home=home, data_dir=data_dir, force=True)
+    svg_a = api.render_snapshot_svg(snapshot)
+    svg_b = api.render_snapshot_svg(snapshot)
+
+    assert svg_a == svg_b
+    assert svg_a.startswith("<svg")
+    assert "memory-mandala" in svg_a
+    assert snapshot["state_hash"][:12] in svg_a
