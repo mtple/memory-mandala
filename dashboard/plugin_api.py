@@ -104,6 +104,7 @@ def _extract_keywords(text: str, limit: int = 18) -> list[str]:
 
 
 def _category_counts(text: str) -> dict[str, int]:
+    text = re.sub(r"^_?Last updated:.*$", "", text, flags=re.I | re.M)
     lowered = text.lower()
     counts: dict[str, int] = {}
     for category, needles in CATEGORY_RULES.items():
@@ -193,6 +194,8 @@ def _evidence_items(category: str, sources: list[dict[str, Any]], limit: int = 3
         chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
         for chunk in chunks:
             raw_clean = " ".join(chunk.strip().lstrip("-•* ").split())
+            if re.match(r"^_?Last updated:", raw_clean, re.I):
+                continue
             clean = re.sub(r"^(?:[#>*\s-]*)(?:[A-Za-z &/]+):\s*", "", raw_clean).strip()
             if not clean:
                 continue
