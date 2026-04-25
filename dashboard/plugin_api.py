@@ -178,6 +178,95 @@ def _collect_session_summary() -> dict[str, Any]:
         return {"available": False, "recent_count": 0, "sample": []}
 
 
+def _evidence_items(category: str, sources: list[dict[str, Any]], limit: int = 3) -> list[dict[str, str]]:
+    needles = CATEGORY_RULES.get(category, [])
+    items: list[dict[str, str]] = []
+    for source in sources:
+        text = source.get("text", "")
+        chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
+        for chunk in chunks:
+            clean = " ".join(chunk.strip().lstrip("-•* ").split())
+            if not clean:
+                continue
+            lower = clean.lower()
+            if any(needle in lower for needle in needles):
+                items.append({"source": source.get("name", "memory"), "text": clean[:180]})
+                break
+        if len(items) >= limit:
+            break
+    return items
+
+
+def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a functional map of memory sections, gaps, evidence, and relationships."""
+    categories = genome.get("categories", {})
+    totals = genome.get("totals", {})
+    skills = genome.get("skills", [])
+    section_meta = {
+        "identity": ("Identity", "who the agent is and what role it plays", "Add a short identity note: role, scope, and who the agent helps."),
+        "preferences": ("User preferences", "how the user wants the agent to behave", "Record durable user preferences or communication style."),
+        "projects": ("Projects", "active repos, products, domains, and work context", "Add stable project conventions or current project names."),
+        "skills": ("Skills", "procedural knowledge the agent can reuse", "Create or update skills for repeated workflows."),
+        "safety": ("Safety", "boundaries, secrets, permissions, and confirmation rules", "Add credential, privacy, and approval boundaries."),
+        "recent": ("Recent learning", "fresh session notes and newly learned context", "Add daily notes or create a new skill after meaningful work."),
+    }
+    sections = []
+    for key in ["identity", "preferences", "projects", "skills", "safety", "recent"]:
+        label, description, recommendation = section_meta[key]
+        count = len(skills) if key == "skills" else int(categories.get(key, 0))
+        status = "present" if count > 0 else "gap"
+        if key == "skills":
+            items = [{"source": "skills", "text": skill.get("name", "unnamed skill")[:180]} for skill in skills[:5]]
+        else:
+            items = _evidence_items(key, sources)
+        sections.append({
+            "id": key,
+            "label": label,
+            "description": description,
+            "count": count,
+            "status": status,
+            "items": items,
+            "recommendation": recommendation if status == "gap" else "Keep this section current as memory changes.",
+        })
+
+    present = [section for section in sections if section["status"] == "present"]
+    gaps = [section for section in sections if section["status"] == "gap"]
+    coverage = len(present) / len(sections) if sections else 0
+    if coverage >= 0.75:
+        coverage_label = "balanced"
+    elif coverage >= 0.4:
+        coverage_label = "developing"
+    else:
+        coverage_label = "thin"
+
+    edges = []
+    for a, b, reason in [
+        ("identity", "preferences", "behavior depends on role + user expectations"),
+        ("projects", "skills", "project work becomes reusable procedure"),
+        ("safety", "projects", "project actions need boundaries"),
+        ("recent", "skills", "recent learning can become skills"),
+        ("preferences", "safety", "preferences and boundaries shape responses"),
+    ]:
+        sa = next(section for section in sections if section["id"] == a)
+        sb = next(section for section in sections if section["id"] == b)
+        if sa["status"] == "present" and sb["status"] == "present":
+            edges.append({"from": a, "to": b, "reason": reason})
+
+    return {
+        "summary": {
+            "coverage": round(coverage, 2),
+            "coverage_label": coverage_label,
+            "present_sections": len(present),
+            "gap_sections": len(gaps),
+            "primary_gap": gaps[0]["id"] if gaps else None,
+            "total_sources": totals.get("memory_sources", 0),
+            "total_skills": totals.get("skills", 0),
+        },
+        "sections": sections,
+        "edges": edges,
+    }
+
+
 def build_insights(genome: dict[str, Any]) -> dict[str, Any]:
     """Translate the visual genome into plain-English things worth noticing."""
     categories = genome.get("categories", {})
@@ -306,6 +395,7 @@ def compute_memory_genome(home: Path | None = None) -> dict[str, Any]:
             "novelty": round(novelty, 3),
         },
     }
+    genome["structure"] = build_memory_structure(genome, sources)
     genome["insights"] = build_insights(genome)
     return genome
 
@@ -343,6 +433,7 @@ def _snapshot_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "signals": snapshot.get("signals", {}),
         "categories": snapshot.get("categories", {}),
         "insights": snapshot.get("insights", {}),
+        "structure": snapshot.get("structure", {}),
     }
 
 

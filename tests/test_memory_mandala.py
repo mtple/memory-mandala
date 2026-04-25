@@ -123,3 +123,42 @@ def test_snapshot_summary_preserves_insights_for_timeline(tmp_path):
 
     assert snapshot["insights"]["takeaways"]
     assert timeline[0]["insights"]["headline"] == snapshot["insights"]["headline"]
+
+
+def test_memory_structure_is_functional_not_decorative(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "memory").mkdir(parents=True)
+    (home / "skills" / "ops" / "deploy").mkdir(parents=True)
+    (home / "MEMORY.md").write_text(
+        "Identity: coding agent. User prefers concise verified answers. Project uses FastAPI. Never leak secrets.\n",
+        encoding="utf-8",
+    )
+    (home / "memory" / "2026-04-25.md").write_text("Recent: learned dashboard plugin workflow.\n", encoding="utf-8")
+    (home / "skills" / "ops" / "deploy" / "SKILL.md").write_text("---\nname: deploy\n---\n# Deploy workflow\n", encoding="utf-8")
+
+    genome = api.compute_memory_genome(home)
+    structure = genome["structure"]
+
+    assert structure["summary"]["coverage_label"] in {"balanced", "developing", "thin"}
+    sections = {section["id"]: section for section in structure["sections"]}
+    assert set(sections) == {"identity", "preferences", "projects", "skills", "safety", "recent"}
+    assert sections["identity"]["status"] == "present"
+    assert sections["safety"]["status"] == "present"
+    assert sections["skills"]["items"]
+    assert any("MEMORY.md" in item["source"] for item in sections["identity"]["items"])
+    assert structure["edges"]
+
+
+def test_memory_structure_marks_missing_sections_as_gaps(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "MEMORY.md").write_text("Project dashboard plugin plugin.\n", encoding="utf-8")
+
+    structure = api.compute_memory_genome(home)["structure"]
+    sections = {section["id"]: section for section in structure["sections"]}
+
+    assert sections["identity"]["status"] == "gap"
+    assert sections["safety"]["status"] == "gap"
+    assert "add" in sections["identity"]["recommendation"].lower()
