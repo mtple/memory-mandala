@@ -3,7 +3,7 @@
   "label": "Memory Mandala",
   "description": "A living generative artwork that evolves with Hermes memory.",
   "icon": "Sparkles",
-  "version": "0.9.1",
+  "version": "1.0.0",
   "tab": {
     "path": "/memory-mandala",
     "position": "after:skills"
@@ -13,7 +13,7 @@
     "sessions:top",
     "skills:top"
   ],
-  "entry": "dist/index.baoyu-legible-091.js",
-  "css": "dist/style.baoyu-legible-091.css",
+  "entry": "dist/index.linear-ux-100.js",
+  "css": "dist/style.linear-ux-100.css",
   "api": "plugin_api.py"
 }
