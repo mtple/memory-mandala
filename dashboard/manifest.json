@@ -3,7 +3,7 @@
   "label": "Memory Mandala",
   "description": "A living generative artwork that evolves with Hermes memory.",
   "icon": "Sparkles",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "tab": {
     "path": "/memory-mandala",
     "position": "after:skills"
@@ -13,7 +13,7 @@
     "sessions:top",
     "skills:top"
   ],
-  "entry": "dist/index.fast-load.js",
-  "css": "dist/style.fast-load.css",
+  "entry": "dist/index.clickable.js",
+  "css": "dist/style.clickable.css",
   "api": "plugin_api.py"
 }
