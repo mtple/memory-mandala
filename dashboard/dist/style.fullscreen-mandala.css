@@ -118,3 +118,21 @@
   .mm-bottom-left { display: none; }
   .mm-float { left: 18px !important; right: auto !important; top: auto !important; bottom: 18px; }
 }
+
+/* organized data mandala layers */
+.mm-sector { cursor: pointer; }
+.mm-sector path { opacity: .105; stroke-width: 1.4; stroke-opacity: .62; transition: opacity .16s ease, stroke-opacity .16s ease; }
+.mm-sector:hover path { opacity: .22; stroke-opacity: 1; }
+.mm-sector text { fill: color-mix(in srgb, var(--mm-text) 82%, transparent); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; pointer-events: none; paint-order: stroke; stroke: var(--mm-bg); stroke-width: 4px; }
+.mm-data-petal { opacity: .22; stroke-width: 1.2; stroke-opacity: .75; filter: url(#mmGlow); transform-origin: center; }
+.mm-data-petal:nth-child(3n) { opacity: .12; }
+.mm-data-petal:nth-child(4n) { stroke-dasharray: 2 5; }
+.mm-sacred-poly { stroke-width: 1.45; stroke-opacity: .38; }
+.mm-hub-orbit text { paint-order: stroke; stroke: var(--mm-bg); stroke-width: 4px; font-weight: 800; }
+.mm-link path { stroke-linecap: round; }
+.mm-link.alive path { stroke-opacity: .38; }
+.mm-memory-glyph ellipse { stroke-width: 1.05; stroke-opacity: .7; }
+.mm-memory-glyph circle { paint-order: stroke; }
+.mm-memory-glyph text { paint-order: stroke; stroke: var(--mm-bg); stroke-width: 3px; }
+.mm-top-left { background: color-mix(in srgb, var(--mm-card) 54%, transparent); }
+.mm-top-right { background: color-mix(in srgb, var(--mm-card) 54%, transparent); }

@@ -25,26 +25,39 @@
   function terms(item) { return item && (item.shared_terms || item.terms || []); }
   function keyTerms(list, n) { return (list || []).filter(Boolean).slice(0, n); }
   function polar(cx, cy, r, angle) { return [cx + Math.cos(angle) * r, cy + Math.sin(angle) * r]; }
+  function annularPath(cx, cy, r0, r1, a0, a1) {
+    const p0 = polar(cx, cy, r1, a0), p1 = polar(cx, cy, r1, a1), p2 = polar(cx, cy, r0, a1), p3 = polar(cx, cy, r0, a0);
+    const large = Math.abs(a1 - a0) > Math.PI ? 1 : 0;
+    return `M ${p0[0]} ${p0[1]} A ${r1} ${r1} 0 ${large} 1 ${p1[0]} ${p1[1]} L ${p2[0]} ${p2[1]} A ${r0} ${r0} 0 ${large} 0 ${p3[0]} ${p3[1]} Z`;
+  }
+  const KINDS = ["identity", "preferences", "projects", "skills", "safety", "recent"];
+  function kindIndex(kind) { return Math.max(0, KINDS.indexOf(kind)); }
+  function sectorMid(kind) { return -Math.PI / 2 + (Math.PI * 2 * (kindIndex(kind) + .5) / KINDS.length); }
+  function sectorStart(kind) { return -Math.PI / 2 + (Math.PI * 2 * kindIndex(kind) / KINDS.length); }
 
   function graphLayout(graph) {
     const nodes = graph.nodes || [];
     const links = graph.connections || [];
     const hubs = graph.hubs || [];
     const cx = 500, cy = 500;
-    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
-    const termRank = Object.fromEntries(hubs.map((h, i) => [h.term, i]));
+    const byKind = Object.fromEntries(KINDS.map((k) => [k, []]));
+    nodes.forEach((n) => (byKind[n.kind] || byKind.projects).push(n));
     const pos = {};
-    const total = Math.max(1, nodes.length);
-    nodes.forEach((node, i) => {
-      const dominant = (node.terms || []).find((t) => termRank[t] !== undefined);
-      const hubShift = dominant ? termRank[dominant] * 0.22 : 0;
-      const angle = -Math.PI / 2 + (Math.PI * 2 * i / total) + hubShift + ((node.weight || 1) * 0.009);
-      const kindRing = node.kind === "identity" ? 145 : node.kind === "safety" ? 235 : node.kind === "skills" ? 370 : node.kind === "recent" ? 315 : 260;
-      const r = kindRing + ((node.terms || []).length % 4) * 18;
-      const [x, y] = polar(cx, cy, r, angle);
-      pos[node.id] = { x, y, angle, r, node };
+    KINDS.forEach((kind) => {
+      const group = byKind[kind] || [];
+      const start = sectorStart(kind) + 0.11;
+      const span = (Math.PI * 2 / KINDS.length) - 0.22;
+      group.forEach((node, i) => {
+        const t = (i + .5) / Math.max(1, group.length);
+        const angle = start + span * t;
+        const termDepth = Math.min(5, (node.terms || []).length);
+        const usage = node.kind === "skills" ? Math.min(1, (node.usage_heat || 0)) * 42 : 0;
+        const r = 168 + termDepth * 28 + (i % 3) * 42 + usage;
+        const [x, y] = polar(cx, cy, r, angle);
+        pos[node.id] = { x, y, angle, r, node };
+      });
     });
-    return { nodes, links, hubs, pos, byId, cx, cy };
+    return { nodes, links, hubs, pos, byKind, cx, cy };
   }
 
   function Overlay({ item, pinned, graph, onPin, onClose, onOpenTerm }) {
@@ -64,6 +77,7 @@
       ),
       data.meta && e("code", { className: "mm-meta" }, data.meta),
       data.text && e("p", { className: "mm-maintext" }, data.text),
+      data.source_path && e("code", { className: "mm-meta" }, data.source_path),
       itemTerms.length ? e("div", { className: "mm-term-row" }, itemTerms.map((t) => e("button", { key: t, onClick: () => onOpenTerm(t) }, t))) : null,
       evidence.length ? e("div", { className: "mm-evidence-pair" }, evidence.map((ev, i) => e("button", { key: i, onClick: () => onPin({ type: "evidence", data: { title: `evidence ${i + 1}`, text: ev, meta: data.meta }, x: item.x, y: item.y }) }, ev))) : null,
       related.length ? e("div", { className: "mm-related" },
@@ -88,7 +102,7 @@
       setTermFocus(term);
       setPinned({
         type: "term hub",
-        data: { title: term, text: related.map((n) => n.text).join(" | "), meta: `${related.length} memory facts`, terms: [term] },
+        data: { title: term, text: `${term} is shared by ${related.length} memory facts.`, meta: `${related.length} memory facts`, terms: [term], evidence: related.map((n) => n.text) },
         x: window.innerWidth - 500,
         y: 120
       });
@@ -96,7 +110,7 @@
 
     const nodeItem = (node, evt) => ({
       type: "memory fact",
-      data: { ...node, title: node.source, meta: (node.terms || []).join(", ") },
+      data: { ...node, title: node.source, meta: (node.terms || []).join(", "), source_path: node.source_path },
       x: evt.clientX,
       y: evt.clientY
     });
@@ -134,6 +148,21 @@
           e("filter", { id: "mmGlow" }, e("feGaussianBlur", { stdDeviation: "4", result: "b" }), e("feMerge", null, e("feMergeNode", { in: "b" }), e("feMergeNode", { in: "SourceGraphic" })))
         ),
         e("rect", { width: 1000, height: 1000, fill: "url(#mmPsyBg)" }),
+        KINDS.map((kind) => {
+          const a0 = sectorStart(kind) + 0.018;
+          const a1 = sectorStart(kind) + Math.PI * 2 / KINDS.length - 0.018;
+          const count = (layout.byKind[kind] || []).length;
+          return e("g", { key: `sector-${kind}`, className: `mm-sector ${kind}`, onMouseMove: (evt) => setHover({ type: "sector", data: { title: KIND[kind].label, text: `${count} real memory facts in this sector.`, meta: kind, terms: [] }, x: evt.clientX, y: evt.clientY }), onClick: (evt) => setPinned({ type: "sector", data: { title: KIND[kind].label, text: `${count} real memory facts in this sector.`, meta: kind, terms: [] }, x: evt.clientX, y: evt.clientY }) },
+            e("path", { d: annularPath(layout.cx, layout.cy, 112, 455, a0, a1), style: { fill: color(kind), stroke: color(kind) } }),
+            e("text", { x: polar(layout.cx, layout.cy, 468, sectorMid(kind))[0], y: polar(layout.cx, layout.cy, 468, sectorMid(kind))[1], textAnchor: "middle" }, `${KIND[kind].label} · ${count}`)
+          );
+        }),
+        KINDS.flatMap((kind) => Array.from({ length: Math.max(2, Math.min(10, (layout.byKind[kind] || []).length || 0)) }, (_, j) => {
+          const total = Math.max(2, Math.min(10, (layout.byKind[kind] || []).length || 0));
+          const a = sectorStart(kind) + (Math.PI * 2 / KINDS.length) * ((j + .5) / total);
+          const inner = polar(layout.cx, layout.cy, 118 + j * 21, a);
+          return e("ellipse", { key: `petal-${kind}-${j}`, className: `mm-data-petal ${kind}`, cx: inner[0], cy: inner[1], rx: 9 + j * .9, ry: 38 + j * 2.7, transform: `rotate(${a * 180 / Math.PI} ${inner[0]} ${inner[1]})`, style: { fill: color(kind), stroke: color(kind) } });
+        })),
         [110, 170, 230, 290, 350, 410].map((r, i) => e("polygon", {
           key: `poly-${r}`,
           className: "mm-sacred-poly",
@@ -180,9 +209,6 @@
           e("text", { x: layout.cx, y: layout.cy - 2, textAnchor: "middle" }, structure.summary.connection_count || 0),
           e("text", { x: layout.cx, y: layout.cy + 18, textAnchor: "middle" }, "links")
         )
-      ),
-      e("div", { className: "mm-corner mm-bottom-left" },
-        keyTerms(structure.summary.strongest_terms, 8).map((t) => e("button", { key: t, onClick: () => openTerm(t) }, t))
       ),
       graph.nodes && graph.nodes.length ? null : e("div", { className: "mm-empty" }, "no strong memory graph yet"),
       e(Overlay, { item: hover && !pinned ? hover : null, graph, onOpenTerm: openTerm }),
