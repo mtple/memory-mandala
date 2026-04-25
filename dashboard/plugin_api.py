@@ -148,21 +148,47 @@ def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
 
 
 def _skill_usage_counts(home: Path, skill_names: list[str]) -> dict[str, int]:
-    """Count best-effort skill mentions in saved session transcripts."""
+    """Count best-effort skill mentions in recent saved session transcripts.
+
+    This intentionally samples recent session files and caches by file signature. The
+    dashboard must render quickly; exact all-time counts are less useful than a fast
+    heat map of which skills show up most in recent work.
+    """
     sessions_dir = home / "sessions"
     counts = {name: 0 for name in skill_names}
-    if not sessions_dir.exists():
+    if not sessions_dir.exists() or not skill_names:
         return counts
-    patterns = {name: re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(name)}(?![A-Za-z0-9_-])", re.I) for name in skill_names}
-    paths = sorted(set(list(sessions_dir.glob("session_*.json")) + list(sessions_dir.glob("*.jsonl")) + list(sessions_dir.glob("*.json"))))
+    paths = sorted(
+        set(list(sessions_dir.glob("session_*.json")) + list(sessions_dir.glob("*.jsonl")) + list(sessions_dir.glob("*.json"))),
+        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+        reverse=True,
+    )[:80]
+    signature = [[p.name, p.stat().st_mtime_ns, p.stat().st_size] for p in paths if p.is_file()]
+    cache_key = _sha(_stable_json({"skills": sorted(skill_names), "files": signature}))
+    cache_path = default_data_dir() / "skill_usage_cache.json"
+    try:
+        if cache_path.exists():
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("cache_key") == cache_key:
+                return {name: int(cached.get("counts", {}).get(name, 0)) for name in skill_names}
+    except Exception:
+        pass
+
+    lowered_names = {name: name.lower() for name in skill_names}
     for path in paths:
         if not path.is_file():
             continue
-        text = _safe_read(path, 250_000)
+        text = _safe_read(path, 80_000).lower()
         if not text:
             continue
-        for name, pattern in patterns.items():
-            counts[name] += len(pattern.findall(text))
+        for name, lowered in lowered_names.items():
+            counts[name] += text.count(lowered)
+
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"cache_key": cache_key, "counts": counts}, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
     return counts
 
 
