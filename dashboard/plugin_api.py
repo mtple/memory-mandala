@@ -122,7 +122,10 @@ def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
         # generic persona files so labels say what the agent remembers, not boilerplate.
         candidates.extend([memories_dir / "MEMORY.md", memories_dir / "USER.md"])
         candidates.extend(sorted(memories_dir.glob("*.md")))
-    candidates.extend([home / "MEMORY.md", home / "USER.md", home / "AGENTS.md", home / "SOUL.md"])
+    # Limit the graph to the actual durable memory system. Persona/bootstrap files such
+    # as AGENTS.md and SOUL.md contain examples and operating instructions that read as
+    # filler in this plugin, so they are intentionally excluded.
+    candidates.extend([home / "MEMORY.md", home / "USER.md"])
     memory_dir = home / "memory"
     if memory_dir.exists():
         candidates.extend(sorted(memory_dir.glob("*.md"))[-60:])
@@ -276,6 +279,7 @@ def _memory_terms(text: str, limit: int = 12) -> list[str]:
         "workflow", "workflows", "dashboard", "plugin", "memory", "recent", "learned",
         "identity", "role", "rules", "security", "never", "send", "review", "activity",
         "uses", "built", "created", "updated", "fixed", "operator", "platform", "system",
+        "data", "engagement", "works", "scored", "likes", "recast", "replies",
     }
     terms = []
     for term in raw_terms:
