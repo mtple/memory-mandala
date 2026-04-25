@@ -358,9 +358,8 @@ def _build_memory_graph(facts: list[dict[str, Any]], limit: int = 36) -> dict[st
         for b in nodes[i + 1:]:
             terms_b = set(b.get("terms", []))
             shared = sorted(terms_a & terms_b)
-            if not shared:
+            if len(shared) < 2:
                 continue
-            # Avoid weak single-word links between two generic skill names unless they share source context.
             weight = len(shared) + (1 if a.get("kind") != b.get("kind") else 0)
             evidence = [a.get("text", ""), b.get("text", "")]
             connections.append({

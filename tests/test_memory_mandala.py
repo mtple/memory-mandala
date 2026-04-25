@@ -275,3 +275,23 @@ def test_memory_structure_avoids_generic_coverage_filler(tmp_path):
     assert "100%" not in insights["headline"]
     assert not any("complexity is" in item["text"].lower() for item in insights["takeaways"])
     assert any("Matt" in item["text"] or "credentials" in item["text"] for item in insights["takeaways"])
+
+
+def test_memory_graph_omits_weak_single_term_connections(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "MEMORY.md").write_text(
+        "Alpha project uses banana.\n"
+        "Beta note mentions banana.\n"
+        "Tortoise Farcaster posts use tortmusic.eth embeds.\n"
+        "Matt reviews Tortoise Farcaster activity for tortmusic.eth.\n",
+        encoding="utf-8",
+    )
+
+    graph = api.compute_memory_genome(home)["structure"]["memory_graph"]
+
+    assert graph["connections"]
+    assert all(len(conn["shared_terms"]) >= 2 for conn in graph["connections"])
+    assert not any(conn["shared_terms"] == ["banana"] for conn in graph["connections"])
+    assert any({"tortoise", "farcaster"}.issubset(set(conn["shared_terms"])) for conn in graph["connections"])
