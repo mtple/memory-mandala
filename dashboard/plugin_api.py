@@ -178,6 +178,85 @@ def _collect_session_summary() -> dict[str, Any]:
         return {"available": False, "recent_count": 0, "sample": []}
 
 
+def build_insights(genome: dict[str, Any]) -> dict[str, Any]:
+    """Translate the visual genome into plain-English things worth noticing."""
+    categories = genome.get("categories", {})
+    totals = genome.get("totals", {})
+    signals = genome.get("signals", {})
+    keywords = genome.get("keywords", [])
+    dominant_category = max(categories, key=lambda key: categories.get(key, 0)) if categories else "memory"
+    dominant_value = categories.get(dominant_category, 0)
+    motif = ", ".join(keywords[:3]) if keywords else "uncategorized memory"
+
+    takeaways: list[dict[str, str]] = [
+        {
+            "kind": "dominant",
+            "title": "Dominant motif",
+            "text": f"The strongest signal is {dominant_category} ({dominant_value} hits), with motifs around {motif}.",
+        }
+    ]
+
+    if totals.get("memory_sources", 0) <= 1:
+        takeaways.append({
+            "kind": "coverage",
+            "title": "Low source coverage",
+            "text": "This bloom is based on very few memory files, so the artwork is more like a sketch than a full portrait.",
+        })
+    if categories.get("identity", 0) == 0:
+        takeaways.append({
+            "kind": "gap",
+            "title": "Identity gap",
+            "text": "No identity signals were found. Add who the agent is, who it helps, or what role it plays to give the center more meaning.",
+        })
+    if categories.get("safety", 0) == 0:
+        takeaways.append({
+            "kind": "gap",
+            "title": "Safety gap",
+            "text": "No safety signals were found. If this agent has boundaries or credential rules, they are not visible in this bloom.",
+        })
+    if categories.get("recent", 0) == 0:
+        takeaways.append({
+            "kind": "gap",
+            "title": "No recent-growth signal",
+            "text": "The bloom does not show much recent learning yet; add daily notes or new skills to make the timeline evolve.",
+        })
+
+    complexity = int(round(float(signals.get("complexity", 0)) * 100))
+    stability = int(round(float(signals.get("stability", 0)) * 100))
+    novelty = int(round(float(signals.get("novelty", 0)) * 100))
+    takeaways.append({
+        "kind": "reading",
+        "title": "Visual reading",
+        "text": f"Complexity is {complexity}%, stability is {stability}%, and novelty is {novelty}% — more rings and chords mean denser memory structure.",
+    })
+
+    if totals.get("memory_sources", 0) <= 1 or categories.get("identity", 0) == 0:
+        action = "Add a short identity/user-profile memory, then grow a new bloom."
+    elif categories.get("safety", 0) == 0:
+        action = "Add explicit safety or credential-handling rules, then grow a new bloom."
+    elif categories.get("recent", 0) == 0:
+        action = "Create a recent daily note or skill update to make the next bloom show growth."
+    else:
+        action = "Compare this bloom to the next snapshot after a meaningful memory or skill change."
+    takeaways.append({"kind": "action", "title": "Suggested next bloom", "text": action})
+
+    return {
+        "headline": f"This bloom is mostly about {dominant_category}: {motif}.",
+        "dominant_category": dominant_category,
+        "dominant_value": dominant_value,
+        "motif": motif,
+        "takeaways": takeaways[:5] + [takeaways[-1]],
+        "legend": {
+            "center": "Center = total memory sources, skills, and recent sessions feeding this bloom.",
+            "rings": "Rings = stability and long-term structure; more complete context produces calmer nested rings.",
+            "petals": "Petals = category signals such as identity, preferences, projects, safety, and recent learning.",
+            "nodes": "Outer nodes/chords = skill and keyword constellations; denser chords mean more interconnected context.",
+            "keywords": "Outer words = strongest motifs extracted from memory and skill names.",
+            "timeline": "Each saved bloom is a local snapshot; compare snapshots to see how memory changed over time.",
+        },
+    }
+
+
 def compute_memory_genome(home: Path | None = None) -> dict[str, Any]:
     """Return a deterministic visual DNA summary of the current Hermes memory state."""
     home = Path(home or hermes_home())
@@ -204,7 +283,7 @@ def compute_memory_genome(home: Path | None = None) -> dict[str, Any]:
     stability = 1.0 - min(0.8, len([s for s in sources if s["kind"] == "daily"]) / 75)
     novelty = min(1.0, session_summary.get("recent_count", 0) / 25)
 
-    return {
+    genome = {
         "schema_version": 1,
         "state_hash": state_hash,
         "seed": int(state_hash[:12], 16),
@@ -227,6 +306,8 @@ def compute_memory_genome(home: Path | None = None) -> dict[str, Any]:
             "novelty": round(novelty, 3),
         },
     }
+    genome["insights"] = build_insights(genome)
+    return genome
 
 
 def load_timeline(data_dir: Path | None = None) -> dict[str, Any]:
@@ -261,6 +342,7 @@ def _snapshot_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "totals": snapshot.get("totals", {}),
         "signals": snapshot.get("signals", {}),
         "categories": snapshot.get("categories", {}),
+        "insights": snapshot.get("insights", {}),
     }
 
 

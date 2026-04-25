@@ -118,6 +118,29 @@
     return e(Comp, { ...props, className: `mm-button ${props.className || ""}` }, props.children);
   }
 
+  function InsightsPanel({ insights }) {
+    if (!insights) return null;
+    const takeaways = insights.takeaways || [];
+    const legend = insights.legend || {};
+    return e(Card, { className: "mm-insights-card" },
+      e("p", { className: "mm-eyebrow compact" }, "reading this bloom"),
+      e("h2", null, "What you are looking at"),
+      e("p", { className: "mm-insight-headline" }, insights.headline || "This bloom summarizes the current memory state."),
+      e("div", { className: "mm-takeaways" }, takeaways.map((item, idx) => e("div", { className: `mm-takeaway ${item.kind || "note"}`, key: `${item.kind}-${idx}` },
+        e("span", null, item.kind || "note"),
+        e("strong", null, item.title),
+        e("p", null, item.text)
+      ))),
+      e("details", { className: "mm-legend" },
+        e("summary", null, "visual legend"),
+        e("dl", null, Object.entries(legend).map(([key, value]) => [
+          e("dt", { key: `${key}-dt` }, key),
+          e("dd", { key: `${key}-dd` }, value)
+        ]).flat())
+      )
+    );
+  }
+
   function MemoryMandalaPage() {
     const [state, setState] = hooks.useState(null);
     const [current, setCurrent] = hooks.useState(null);
@@ -164,6 +187,7 @@
     const categories = genome.categories || {};
     const totals = genome.totals || {};
     const signals = genome.signals || {};
+    const insights = (current && current.insights) || genome.insights;
 
     return e("div", { className: "mm-shell" },
       e("div", { className: "mm-hero" },
@@ -187,6 +211,7 @@
           )
         ),
         e("div", { className: "mm-side" },
+          e(InsightsPanel, { insights }),
           e(Card, null,
             e("h2", null, "Memory DNA"),
             e("div", { className: "mm-stats" },
@@ -223,7 +248,7 @@
         },
           e(MandalaSvg, { snapshot: snap, compact: true }),
           e("strong", null, snap.reason),
-          e("span", null, new Date(snap.created_at).toLocaleString())
+          e("span", null, snap.insights && snap.insights.headline ? snap.insights.headline : new Date(snap.created_at).toLocaleString())
         ))) : e("p", { className: "mm-muted" }, "No blooms yet. Press grow mandala to create the first snapshot.")
       )
     );

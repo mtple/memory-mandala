@@ -89,3 +89,37 @@ def test_svg_renderer_is_deterministic_for_same_snapshot(tmp_path):
     assert svg_a.startswith("<svg")
     assert "memory-mandala" in svg_a
     assert snapshot["state_hash"][:12] in svg_a
+
+
+def test_memory_genome_includes_plain_english_insights(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "MEMORY.md").write_text(
+        "Project dashboard plugin plugin plugin. User prefers concise UI.\n",
+        encoding="utf-8",
+    )
+
+    genome = api.compute_memory_genome(home)
+    insights = genome["insights"]
+
+    assert insights["headline"].startswith("This bloom is mostly about")
+    assert insights["dominant_category"] == "projects"
+    assert any(item["kind"] == "gap" and "safety" in item["text"].lower() for item in insights["takeaways"])
+    assert any(item["kind"] == "action" for item in insights["takeaways"])
+    assert insights["legend"]["center"].startswith("Center")
+    assert "petals" in insights["legend"]
+
+
+def test_snapshot_summary_preserves_insights_for_timeline(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    data_dir = tmp_path / "plugin-data"
+    home.mkdir()
+    (home / "MEMORY.md").write_text("Never leak secrets. User prefers verified answers.\n", encoding="utf-8")
+
+    snapshot = api.generate_snapshot(home=home, data_dir=data_dir, force=True)
+    timeline = api.load_timeline(data_dir)["snapshots"]
+
+    assert snapshot["insights"]["takeaways"]
+    assert timeline[0]["insights"]["headline"] == snapshot["insights"]["headline"]

@@ -21,6 +21,12 @@
   font-size: 0.72rem;
 }
 
+.mm-eyebrow.compact {
+  margin-bottom: 0.2rem;
+  font-size: 0.65rem;
+  color: #7dd3fc;
+}
+
 .mm-hero h1 {
   margin: 0;
   font-size: clamp(2rem, 4vw, 4.2rem);
@@ -93,7 +99,7 @@
 
 .mm-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
   gap: 1rem;
   align-items: stretch;
 }
@@ -179,6 +185,97 @@
   margin: 0 0 0.9rem;
   font-size: 1rem;
   letter-spacing: -0.02em;
+}
+
+.mm-insights-card {
+  border-color: rgba(125, 211, 252, 0.32) !important;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(125, 211, 252, 0.13), transparent 36%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.86), rgba(2, 6, 23, 0.9)) !important;
+}
+
+.mm-insight-headline {
+  margin: -0.35rem 0 0.85rem;
+  color: #e0f2fe;
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.mm-takeaways {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.mm-takeaway {
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 0.85rem;
+  padding: 0.65rem 0.7rem;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.mm-takeaway span {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  color: #94a3b8;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mm-takeaway strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 0.86rem;
+}
+
+.mm-takeaway p {
+  margin: 0.22rem 0 0;
+  color: var(--color-muted-foreground);
+  line-height: 1.4;
+  font-size: 0.8rem;
+}
+
+.mm-takeaway.gap {
+  border-color: rgba(251, 191, 36, 0.32);
+}
+
+.mm-takeaway.action {
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(6, 78, 59, 0.16);
+}
+
+.mm-legend {
+  margin-top: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  padding-top: 0.7rem;
+  color: var(--color-muted-foreground);
+}
+
+.mm-legend summary {
+  cursor: pointer;
+  color: #c4b5fd;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.mm-legend dl {
+  display: grid;
+  grid-template-columns: 4.6rem 1fr;
+  gap: 0.45rem 0.7rem;
+  margin: 0.65rem 0 0;
+  font-size: 0.78rem;
+}
+
+.mm-legend dt {
+  color: #e2e8f0;
+  text-transform: capitalize;
+}
+
+.mm-legend dd {
+  margin: 0;
+  line-height: 1.35;
 }
 
 .mm-stats {
@@ -313,6 +410,7 @@
 .mm-snapshot span {
   color: var(--color-muted-foreground);
   font-size: 0.72rem;
+  line-height: 1.25;
 }
 
 .mm-slot-banner {
