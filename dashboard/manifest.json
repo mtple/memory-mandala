@@ -13,7 +13,7 @@
     "sessions:top",
     "skills:top"
   ],
-  "entry": "dist/index.art-map.js",
-  "css": "dist/style.art-map.css",
+  "entry": "dist/index.living-map.js",
+  "css": "dist/style.living-map.css",
   "api": "plugin_api.py"
 }
