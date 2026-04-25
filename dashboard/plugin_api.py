@@ -228,9 +228,11 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
         status = "present" if count > 0 else "gap"
         if key == "skills":
             items = [{"source": "skills", "text": skill.get("name", "unnamed skill")[:180]} for skill in skills[:5]]
+            examples = ", ".join(item["text"] for item in items[:4])
+            summary_text = f"{len(skills)} reusable workflows installed" + (f", including {examples}." if examples else ".")
         else:
             items = _evidence_items(key, sources)
-        summary_text = items[0]["text"] if items else recommendation
+            summary_text = items[0]["text"] if items else recommendation
         sections.append({
             "id": key,
             "label": label,
