@@ -161,4 +161,30 @@ def test_memory_structure_marks_missing_sections_as_gaps(tmp_path):
 
     assert sections["identity"]["status"] == "gap"
     assert sections["safety"]["status"] == "gap"
-    assert "add" in sections["identity"]["recommendation"].lower()
+    assert "add" in sections["identity"]["summary_text"].lower()
+
+
+def test_reads_hermes_memories_directory_and_builds_descriptive_labels(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "memories").mkdir(parents=True)
+    (home / "memories" / "MEMORY.md").write_text(
+        "Identity & Role: tortOS, AI operator of Tortoise, a social music platform on Farcaster/Base.\n"
+        "Voice & Posting Rules: lowercase, no emojis, chill late-night DJ energy.\n"
+        "Security: Never send API keys, tokens, or credentials over Telegram.\n",
+        encoding="utf-8",
+    )
+    (home / "memories" / "USER.md").write_text(
+        "Matt prefers emailed reports in clean HTML, not raw Markdown.\n",
+        encoding="utf-8",
+    )
+
+    genome = api.compute_memory_genome(home)
+    sources = {source["name"] for source in genome["sources"]}
+    sections = {section["id"]: section for section in genome["structure"]["sections"]}
+
+    assert "MEMORY.md" in sources
+    assert sections["identity"]["summary_text"].startswith("tortOS, AI operator of Tortoise")
+    assert "lowercase" in sections["preferences"]["summary_text"] or "HTML" in sections["preferences"]["summary_text"]
+    assert "Never send API keys" in sections["safety"]["summary_text"]
+    assert genome["structure"]["art_layers"]

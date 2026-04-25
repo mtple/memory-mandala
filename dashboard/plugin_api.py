@@ -115,6 +115,10 @@ def _category_counts(text: str) -> dict[str, int]:
 def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     candidates = [home / "MEMORY.md", home / "USER.md", home / "AGENTS.md", home / "SOUL.md"]
+    memories_dir = home / "memories"
+    if memories_dir.exists():
+        candidates.extend([memories_dir / "MEMORY.md", memories_dir / "USER.md"])
+        candidates.extend(sorted(memories_dir.glob("*.md")))
     memory_dir = home / "memory"
     if memory_dir.exists():
         candidates.extend(sorted(memory_dir.glob("*.md"))[-60:])
@@ -185,10 +189,11 @@ def _evidence_items(category: str, sources: list[dict[str, Any]], limit: int = 3
         text = source.get("text", "")
         chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
         for chunk in chunks:
-            clean = " ".join(chunk.strip().lstrip("-•* ").split())
+            raw_clean = " ".join(chunk.strip().lstrip("-•* ").split())
+            clean = re.sub(r"^(?:[#>*\s-]*)(?:[A-Za-z &/]+):\s*", "", raw_clean).strip()
             if not clean:
                 continue
-            lower = clean.lower()
+            lower = raw_clean.lower()
             if any(needle in lower for needle in needles):
                 items.append({"source": source.get("name", "memory"), "text": clean[:180]})
                 break
@@ -219,6 +224,7 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
             items = [{"source": "skills", "text": skill.get("name", "unnamed skill")[:180]} for skill in skills[:5]]
         else:
             items = _evidence_items(key, sources)
+        summary_text = items[0]["text"] if items else recommendation
         sections.append({
             "id": key,
             "label": label,
@@ -226,6 +232,7 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
             "count": count,
             "status": status,
             "items": items,
+            "summary_text": summary_text,
             "recommendation": recommendation if status == "gap" else "Keep this section current as memory changes.",
         })
 
@@ -252,6 +259,26 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
         if sa["status"] == "present" and sb["status"] == "present":
             edges.append({"from": a, "to": b, "reason": reason})
 
+    art_layers = []
+    palette_roles = {
+        "identity": "#7c3aed",
+        "preferences": "#ec4899",
+        "projects": "#06b6d4",
+        "skills": "#f59e0b",
+        "safety": "#ef4444",
+        "recent": "#10b981",
+    }
+    for index, section in enumerate(sections):
+        art_layers.append({
+            "id": section["id"],
+            "label": section["label"],
+            "color": palette_roles[section["id"]],
+            "ring": index + 1,
+            "status": section["status"],
+            "summary_text": section["summary_text"],
+            "motif_count": max(1, min(12, section["count"] or 1)),
+        })
+
     return {
         "summary": {
             "coverage": round(coverage, 2),
@@ -264,6 +291,7 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
         },
         "sections": sections,
         "edges": edges,
+        "art_layers": art_layers,
     }
 
 
