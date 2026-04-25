@@ -47,7 +47,7 @@ STOPWORDS = {
 }
 CATEGORY_RULES = {
     "identity": ["identity", "role", "name", "called", "pronouns", "timezone", "founder", "operator"],
-    "preferences": ["prefers", "preference", "likes", "wants", "style", "tone", "concise", "format"],
+    "preferences": ["prefers", "preference", "likes", "wants", "style", "tone", "format", "voice", "posting rules", "lowercase", "emoji", "html"],
     "projects": ["project", "repo", "repository", "app", "dashboard", "platform", "contract", "plugin"],
     "skills": ["skill", "workflow", "procedure", "steps", "run", "command", "build", "test"],
     "safety": ["never", "secret", "token", "credential", "security", "redact", "ask", "confirm", "safe"],
@@ -114,11 +114,14 @@ def _category_counts(text: str) -> dict[str, int]:
 
 def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
-    candidates = [home / "MEMORY.md", home / "USER.md", home / "AGENTS.md", home / "SOUL.md"]
+    candidates: list[Path] = []
     memories_dir = home / "memories"
     if memories_dir.exists():
+        # Durable Hermes memory is the primary source for this plugin. Read it before
+        # generic persona files so labels say what the agent remembers, not boilerplate.
         candidates.extend([memories_dir / "MEMORY.md", memories_dir / "USER.md"])
         candidates.extend(sorted(memories_dir.glob("*.md")))
+    candidates.extend([home / "MEMORY.md", home / "USER.md", home / "AGENTS.md", home / "SOUL.md"])
     memory_dir = home / "memory"
     if memory_dir.exists():
         candidates.extend(sorted(memory_dir.glob("*.md"))[-60:])
