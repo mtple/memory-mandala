@@ -259,42 +259,165 @@ def _evidence_items(category: str, sources: list[dict[str, Any]], limit: int = 3
     return items
 
 
+def _classify_fact(text: str) -> str:
+    lower = text.lower()
+    scores = {category: sum(lower.count(needle) for needle in needles) for category, needles in CATEGORY_RULES.items()}
+    best = max(scores, key=lambda key: scores[key]) if scores else "projects"
+    if scores.get(best, 0) == 0:
+        return "projects"
+    return best
+
+
+def _memory_terms(text: str, limit: int = 12) -> list[str]:
+    """Extract connection terms specific enough to make a real memory link."""
+    raw_terms = _tokenize(text)
+    generic = STOPWORDS | {
+        "prefers", "preference", "preferences", "answers", "verified", "concise",
+        "workflow", "workflows", "dashboard", "plugin", "memory", "recent", "learned",
+        "identity", "role", "rules", "security", "never", "send", "review", "activity",
+        "uses", "built", "created", "updated", "fixed", "operator", "platform", "system",
+    }
+    terms = []
+    for term in raw_terms:
+        normalized = term.strip("._-").lower()
+        if len(normalized) < 4 or normalized in generic:
+            continue
+        if normalized not in terms:
+            terms.append(normalized)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _extract_memory_facts(sources: list[dict[str, Any]], skills: list[dict[str, Any]], limit: int = 72) -> list[dict[str, Any]]:
+    """Turn the actual memory system into clickable facts.
+
+    Facts are not abstract topic buckets. They are lines/sentences from the memory files
+    and skill names, with entity-like terms used later to form evidence-backed links.
+    """
+    facts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        chunks = re.split(r"(?<=[.!?])\s+|\n+", source.get("text", ""))
+        for chunk in chunks:
+            raw = " ".join(chunk.strip().lstrip("-•* ").split())
+            if not raw or re.match(r"^_?Last updated:", raw, re.I):
+                continue
+            clean = re.sub(r"^(?:[#>*\s-]*)(?:[A-Za-z &/]+):\s*", "", raw).strip()
+            if len(clean) < 8:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            terms = _memory_terms(clean)
+            category = _classify_fact(raw)
+            fact = {
+                "id": _sha(f"{source.get('name')}:{clean}")[:12],
+                "kind": category,
+                "source": source.get("name", "memory"),
+                "source_path": source.get("path", ""),
+                "text": clean[:220],
+                "terms": terms,
+                "weight": max(1, min(12, len(terms))),
+            }
+            facts.append(fact)
+            seen.add(key)
+            if len(facts) >= limit:
+                break
+        if len(facts) >= limit:
+            break
+
+    for skill in skills[:24]:
+        name = skill.get("name", "unnamed skill")
+        terms = _memory_terms(name.replace("-", " "))
+        facts.append({
+            "id": _sha(f"skill:{name}")[:12],
+            "kind": "skills",
+            "source": "SKILL.md",
+            "source_path": skill.get("path", ""),
+            "text": name,
+            "terms": terms or [name.lower()],
+            "weight": max(1, int(skill.get("usage_heat", 0) * 12) or 1),
+            "usage_count": skill.get("usage_count", 0),
+            "usage_heat": skill.get("usage_heat", 0.0),
+        })
+    return facts
+
+
+def _build_memory_graph(facts: list[dict[str, Any]], limit: int = 36) -> dict[str, Any]:
+    nodes = sorted(facts, key=lambda f: (-int(f.get("weight", 1)), f.get("source", ""), f.get("text", "")))[:limit]
+    connections: list[dict[str, Any]] = []
+    for i, a in enumerate(nodes):
+        terms_a = set(a.get("terms", []))
+        if not terms_a:
+            continue
+        for b in nodes[i + 1:]:
+            terms_b = set(b.get("terms", []))
+            shared = sorted(terms_a & terms_b)
+            if not shared:
+                continue
+            # Avoid weak single-word links between two generic skill names unless they share source context.
+            weight = len(shared) + (1 if a.get("kind") != b.get("kind") else 0)
+            evidence = [a.get("text", ""), b.get("text", "")]
+            connections.append({
+                "id": _sha(f"{a['id']}:{b['id']}:{','.join(shared)}")[:12],
+                "from": a["id"],
+                "to": b["id"],
+                "from_kind": a.get("kind"),
+                "to_kind": b.get("kind"),
+                "from_label": a.get("text", "")[:80],
+                "to_label": b.get("text", "")[:80],
+                "shared_terms": shared[:6],
+                "weight": weight,
+                "reason": "shared terms: " + ", ".join(shared[:4]),
+                "source": "shared-memory",
+                "evidence": evidence,
+            })
+    connections.sort(key=lambda c: (-c["weight"], c["from_label"], c["to_label"]))
+    connections = connections[: min(40, len(connections))]
+    term_counts = Counter(term for node in nodes for term in node.get("terms", []))
+    hubs = [{"term": term, "count": count} for term, count in term_counts.most_common(12) if count > 1]
+    return {"nodes": nodes, "connections": connections, "hubs": hubs}
+
+
 def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build a functional map of memory sections, gaps, evidence, and relationships."""
-    categories = genome.get("categories", {})
+    """Build a map from actual memory facts and shared terms, not decorative topic rings."""
     totals = genome.get("totals", {})
     skills = genome.get("skills", [])
+    facts = _extract_memory_facts(sources, skills)
+    graph = _build_memory_graph(facts)
+    facts_by_kind: dict[str, list[dict[str, Any]]] = {key: [] for key in ["identity", "preferences", "projects", "skills", "safety", "recent"]}
+    for fact in facts:
+        facts_by_kind.setdefault(fact.get("kind", "projects"), []).append(fact)
+
     section_meta = {
-        "identity": ("Identity", "who the agent is and what role it plays", "Add a short identity note: role, scope, and who the agent helps."),
-        "preferences": ("User preferences", "how the user wants the agent to behave", "Record durable user preferences or communication style."),
-        "projects": ("Projects", "active repos, products, domains, and work context", "Add stable project conventions or current project names."),
-        "skills": ("Skills", "procedural knowledge the agent can reuse", "Create or update skills for repeated workflows."),
-        "safety": ("Safety", "boundaries, secrets, permissions, and confirmation rules", "Add credential, privacy, and approval boundaries."),
-        "recent": ("Recent learning", "fresh session notes and newly learned context", "Add daily notes or create a new skill after meaningful work."),
+        "identity": ("Identity", "actual identity/role facts found in memory", "Add a durable identity note if this stays empty."),
+        "preferences": ("User preferences", "specific user preference facts found in memory", "Record durable preferences as concrete facts."),
+        "projects": ("Projects", "project/platform/repo facts found in memory", "Add stable project conventions or names."),
+        "skills": ("Skills", "installed workflows connected to remembered work", "Create/update skills for repeated workflows."),
+        "safety": ("Safety", "credential/privacy/permission facts found in memory", "Add explicit boundaries for secrets and external actions."),
+        "recent": ("Recent learning", "daily/recent facts found in memory", "Write recent learnings when they should survive the session."),
     }
     sections = []
     for key in ["identity", "preferences", "projects", "skills", "safety", "recent"]:
         label, description, recommendation = section_meta[key]
-        count = len(skills) if key == "skills" else int(categories.get(key, 0))
-        status = "present" if count > 0 else "gap"
-        if key == "skills":
-            items = [
-                {
-                    "source": "skills",
-                    "text": skill.get("name", "unnamed skill")[:180],
-                    "usage_count": skill.get("usage_count", 0),
-                    "usage_heat": skill.get("usage_heat", 0.0),
-                }
-                for skill in skills[:8]
-            ]
+        items = []
+        for fact in facts_by_kind.get(key, [])[:8]:
+            items.append({
+                "source": fact.get("source", "memory"),
+                "text": fact.get("text", ""),
+                "terms": fact.get("terms", []),
+                "usage_count": fact.get("usage_count", 0),
+                "usage_heat": fact.get("usage_heat", 0.0),
+            })
+        count = len(facts_by_kind.get(key, []))
+        status = "present" if count else "gap"
+        if key == "skills" and items:
             used = [item for item in items if item.get("usage_count", 0) > 0]
-            examples = ", ".join(f"{item['text']} ({item['usage_count']} uses)" for item in (used or items)[:4])
-            if used:
-                summary_text = f"{len(skills)} reusable workflows installed; most used: {examples}."
-            else:
-                summary_text = f"{len(skills)} reusable workflows installed; no usage history found yet."
+            summary_text = "Installed workflows tied into this memory graph: " + ", ".join(
+                f"{item['text']} ({item.get('usage_count', 0)} uses)" for item in (used or items)[:4]
+            ) + "."
         else:
-            items = _evidence_items(key, sources)
             summary_text = items[0]["text"] if items else recommendation
         sections.append({
             "id": key,
@@ -304,146 +427,94 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
             "status": status,
             "items": items,
             "summary_text": summary_text,
-            "recommendation": recommendation if status == "gap" else "Keep this section current as memory changes.",
+            "recommendation": recommendation if status == "gap" else "This is backed by actual memory lines; inspect connected facts for context.",
         })
 
-    present = [section for section in sections if section["status"] == "present"]
-    gaps = [section for section in sections if section["status"] == "gap"]
-    coverage = len(present) / len(sections) if sections else 0
-    if coverage >= 0.75:
-        coverage_label = "balanced"
-    elif coverage >= 0.4:
-        coverage_label = "developing"
-    else:
-        coverage_label = "thin"
-
-    edges = []
-    for a, b, reason in [
-        ("identity", "preferences", "behavior depends on role + user expectations"),
-        ("projects", "skills", "project work becomes reusable procedure"),
-        ("safety", "projects", "project actions need boundaries"),
-        ("recent", "skills", "recent learning can become skills"),
-        ("preferences", "safety", "preferences and boundaries shape responses"),
-    ]:
-        sa = next(section for section in sections if section["id"] == a)
-        sb = next(section for section in sections if section["id"] == b)
-        if sa["status"] == "present" and sb["status"] == "present":
-            edges.append({"from": a, "to": b, "reason": reason})
-
-    art_layers = []
-    palette_roles = {
-        "identity": "#7c3aed",
-        "preferences": "#ec4899",
-        "projects": "#06b6d4",
-        "skills": "#f59e0b",
-        "safety": "#ef4444",
-        "recent": "#10b981",
-    }
-    for index, section in enumerate(sections):
-        art_layers.append({
-            "id": section["id"],
-            "label": section["label"],
-            "color": palette_roles[section["id"]],
-            "ring": index + 1,
-            "status": section["status"],
-            "summary_text": section["summary_text"],
-            "motif_count": max(1, min(12, section["count"] or 1)),
-        })
-
+    strongest_hub = graph["hubs"][0]["term"] if graph.get("hubs") else None
     return {
         "summary": {
-            "coverage": round(coverage, 2),
-            "coverage_label": coverage_label,
-            "present_sections": len(present),
-            "gap_sections": len(gaps),
-            "primary_gap": gaps[0]["id"] if gaps else None,
-            "total_sources": totals.get("memory_sources", 0),
+            "fact_count": len(facts),
+            "connection_count": len(graph.get("connections", [])),
+            "source_count": totals.get("memory_sources", 0),
             "total_skills": totals.get("skills", 0),
+            "strongest_hub": strongest_hub,
+            "strongest_terms": [hub["term"] for hub in graph.get("hubs", [])[:5]],
         },
         "sections": sections,
-        "edges": edges,
-        "art_layers": art_layers,
+        "edges": graph.get("connections", []),
+        "memory_graph": graph,
+        "art_layers": [
+            {
+                "id": node["id"],
+                "label": node.get("text", "")[:64],
+                "kind": node.get("kind"),
+                "source": node.get("source"),
+                "terms": node.get("terms", []),
+                "weight": node.get("weight", 1),
+            }
+            for node in graph.get("nodes", [])
+        ],
     }
-
 
 def build_insights(genome: dict[str, Any]) -> dict[str, Any]:
-    """Translate the visual genome into plain-English things worth noticing."""
-    categories = genome.get("categories", {})
-    totals = genome.get("totals", {})
-    signals = genome.get("signals", {})
-    keywords = genome.get("keywords", [])
-    dominant_category = max(categories, key=lambda key: categories.get(key, 0)) if categories else "memory"
-    dominant_value = categories.get(dominant_category, 0)
-    motif = ", ".join(keywords[:3]) if keywords else "uncategorized memory"
+    """Explain the specific memory graph without generic visual filler."""
+    structure = genome.get("structure", {})
+    graph = structure.get("memory_graph", {})
+    nodes = graph.get("nodes", [])
+    connections = graph.get("connections", [])
+    hubs = graph.get("hubs", [])
+    top_hub = hubs[0]["term"] if hubs else None
+    top_connection = connections[0] if connections else None
 
-    takeaways: list[dict[str, str]] = [
-        {
-            "kind": "dominant",
-            "title": "Dominant motif",
-            "text": f"The strongest signal is {dominant_category} ({dominant_value} hits), with motifs around {motif}.",
-        }
-    ]
-
-    if totals.get("memory_sources", 0) <= 1:
+    takeaways: list[dict[str, str]] = []
+    if top_connection:
         takeaways.append({
-            "kind": "coverage",
-            "title": "Low source coverage",
-            "text": "This bloom is based on very few memory files, so the artwork is more like a sketch than a full portrait.",
+            "kind": "connection",
+            "title": "Strongest real connection",
+            "text": f"{top_connection['from_label']} ↔ {top_connection['to_label']} because both mention {', '.join(top_connection['shared_terms'][:4])}.",
         })
-    if categories.get("identity", 0) == 0:
+    if top_hub:
+        related = [node.get("text", "") for node in nodes if top_hub in node.get("terms", [])][:3]
         takeaways.append({
-            "kind": "gap",
-            "title": "Identity gap",
-            "text": "No identity signals were found. Add who the agent is, who it helps, or what role it plays to give the center more meaning.",
+            "kind": "hub",
+            "title": f"Hub: {top_hub}",
+            "text": f"{top_hub} appears across {hubs[0]['count']} memory facts: " + " | ".join(related),
         })
-    if categories.get("safety", 0) == 0:
+    for node in nodes[:2]:
         takeaways.append({
-            "kind": "gap",
-            "title": "Safety gap",
-            "text": "No safety signals were found. If this agent has boundaries or credential rules, they are not visible in this bloom.",
+            "kind": node.get("kind", "memory"),
+            "title": f"{node.get('source', 'memory')} fact",
+            "text": node.get("text", ""),
         })
-    if categories.get("recent", 0) == 0:
+    if not takeaways:
         takeaways.append({
             "kind": "gap",
-            "title": "No recent-growth signal",
-            "text": "The bloom does not show much recent learning yet; add daily notes or new skills to make the timeline evolve.",
+            "title": "No connected memory yet",
+            "text": "The plugin found memory files, but not enough repeated concrete terms to form reliable links.",
         })
 
-    complexity = int(round(float(signals.get("complexity", 0)) * 100))
-    stability = int(round(float(signals.get("stability", 0)) * 100))
-    novelty = int(round(float(signals.get("novelty", 0)) * 100))
-    takeaways.append({
-        "kind": "reading",
-        "title": "Visual reading",
-        "text": f"Complexity is {complexity}%, stability is {stability}%, and novelty is {novelty}% — more rings and chords mean denser memory structure.",
-    })
-
-    if totals.get("memory_sources", 0) <= 1 or categories.get("identity", 0) == 0:
-        action = "Add a short identity/user-profile memory, then grow a new bloom."
-    elif categories.get("safety", 0) == 0:
-        action = "Add explicit safety or credential-handling rules, then grow a new bloom."
-    elif categories.get("recent", 0) == 0:
-        action = "Create a recent daily note or skill update to make the next bloom show growth."
-    else:
-        action = "Compare this bloom to the next snapshot after a meaningful memory or skill change."
-    takeaways.append({"kind": "action", "title": "Suggested next bloom", "text": action})
+    headline = "Memory graph"
+    if top_connection:
+        headline = f"{', '.join(top_connection['shared_terms'][:3])} connects remembered facts."
+    elif top_hub:
+        headline = f"{top_hub} is the clearest memory hub."
+    elif nodes:
+        headline = f"{nodes[0].get('source', 'memory')} is the clearest memory source."
 
     return {
-        "headline": f"This bloom is mostly about {dominant_category}: {motif}.",
-        "dominant_category": dominant_category,
-        "dominant_value": dominant_value,
-        "motif": motif,
-        "takeaways": takeaways[:5] + [takeaways[-1]],
+        "headline": headline,
+        "dominant_category": nodes[0].get("kind", "memory") if nodes else "memory",
+        "dominant_value": len(connections),
+        "motif": top_hub or "unconnected facts",
+        "takeaways": takeaways[:5],
         "legend": {
-            "center": "Center = total memory sources, skills, and recent sessions feeding this bloom.",
-            "rings": "Rings = stability and long-term structure; more complete context produces calmer nested rings.",
-            "petals": "Petals = category signals such as identity, preferences, projects, safety, and recent learning.",
-            "nodes": "Outer nodes/chords = skill and keyword constellations; denser chords mean more interconnected context.",
-            "keywords": "Outer words = strongest motifs extracted from memory and skill names.",
-            "timeline": "Each saved bloom is a local snapshot; compare snapshots to see how memory changed over time.",
+            "nodes": "Nodes are real memory lines or installed skills from this Hermes home.",
+            "connections": "Connections exist only when two facts share concrete extracted terms.",
+            "hubs": "Hubs are repeated terms that bind multiple remembered facts together.",
+            "sources": "Source labels show which memory file or skill produced the fact.",
+            "timeline": "Snapshots preserve this graph so memory changes can be compared later.",
         },
     }
-
 
 def compute_memory_genome(home: Path | None = None) -> dict[str, Any]:
     """Return a deterministic visual DNA summary of the current Hermes memory state."""

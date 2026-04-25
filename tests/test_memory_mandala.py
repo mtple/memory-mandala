@@ -103,12 +103,11 @@ def test_memory_genome_includes_plain_english_insights(tmp_path):
     genome = api.compute_memory_genome(home)
     insights = genome["insights"]
 
-    assert insights["headline"].startswith("This bloom is mostly about")
-    assert insights["dominant_category"] == "projects"
-    assert any(item["kind"] == "gap" and "safety" in item["text"].lower() for item in insights["takeaways"])
-    assert any(item["kind"] == "action" for item in insights["takeaways"])
-    assert insights["legend"]["center"].startswith("Center")
-    assert "petals" in insights["legend"]
+    assert insights["headline"]
+    assert insights["dominant_category"] in {"projects", "preferences", "memory"}
+    assert any(item["text"] for item in insights["takeaways"])
+    assert insights["legend"]["nodes"].startswith("Nodes are real memory")
+    assert "connections" in insights["legend"]
 
 
 def test_snapshot_summary_preserves_insights_for_timeline(tmp_path):
@@ -140,14 +139,15 @@ def test_memory_structure_is_functional_not_decorative(tmp_path):
     genome = api.compute_memory_genome(home)
     structure = genome["structure"]
 
-    assert structure["summary"]["coverage_label"] in {"balanced", "developing", "thin"}
+    assert structure["summary"]["fact_count"] >= 1
+    assert "coverage_label" not in structure["summary"]
     sections = {section["id"]: section for section in structure["sections"]}
     assert set(sections) == {"identity", "preferences", "projects", "skills", "safety", "recent"}
     assert sections["identity"]["status"] == "present"
     assert sections["safety"]["status"] == "present"
     assert sections["skills"]["items"]
     assert any("MEMORY.md" in item["source"] for item in sections["identity"]["items"])
-    assert structure["edges"]
+    assert "memory_graph" in structure
 
 
 def test_memory_structure_marks_missing_sections_as_gaps(tmp_path):
@@ -218,4 +218,60 @@ def test_skills_are_ranked_by_session_usage(tmp_path):
     assert skills[2]["usage_count"] == 1
     assert skills[0]["usage_heat"] == 1.0
     assert skill_section["items"][0]["usage_count"] == 3
-    assert "most used" in skill_section["summary_text"].lower()
+    assert "memory graph" in skill_section["summary_text"].lower()
+
+
+def test_memory_graph_connections_are_based_on_shared_memory_evidence(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "memories").mkdir(parents=True)
+    (home / "memory").mkdir(parents=True)
+    (home / "skills" / "openclaw" / "farcaster").mkdir(parents=True)
+
+    (home / "memories" / "MEMORY.md").write_text(
+        "Identity & Role: tortOS operates Tortoise on Farcaster/Base.\n"
+        "Voice & Posting Rules: tortOS posts from tortmusic.eth on Farcaster.\n"
+        "Security: Never send API keys or credentials over Telegram.\n",
+        encoding="utf-8",
+    )
+    (home / "memories" / "USER.md").write_text(
+        "Matt built Tortoise and prefers tortOS to review Farcaster activity.\n",
+        encoding="utf-8",
+    )
+    (home / "memory" / "2026-04-25.md").write_text(
+        "Recent: improved Tortoise Farcaster health review workflow.\n",
+        encoding="utf-8",
+    )
+    (home / "skills" / "openclaw" / "farcaster" / "SKILL.md").write_text(
+        "---\nname: farcaster\n---\n# Farcaster\nReview Tortoise and tortmusic.eth activity.\n",
+        encoding="utf-8",
+    )
+
+    structure = api.compute_memory_genome(home)["structure"]
+    graph = structure["memory_graph"]
+
+    assert graph["nodes"], "real memory facts should become graph nodes"
+    assert graph["connections"], "shared entities should create evidence-backed connections"
+    assert any("tortoise" in conn["shared_terms"] and "farcaster" in conn["shared_terms"] for conn in graph["connections"])
+    assert all(conn["evidence"] and conn["source"] == "shared-memory" for conn in graph["connections"])
+    assert not any(conn["reason"] == "project work becomes reusable procedure" for conn in graph["connections"])
+
+
+def test_memory_structure_avoids_generic_coverage_filler(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "MEMORY.md").write_text(
+        "Matt prefers concise verified answers. Never send credentials over Telegram.\n",
+        encoding="utf-8",
+    )
+
+    genome = api.compute_memory_genome(home)
+    summary = genome["structure"]["summary"]
+    insights = genome["insights"]
+
+    assert "coverage" not in summary
+    assert "coverage_label" not in summary
+    assert "100%" not in insights["headline"]
+    assert not any("complexity is" in item["text"].lower() for item in insights["takeaways"])
+    assert any("Matt" in item["text"] or "credentials" in item["text"] for item in insights["takeaways"])
