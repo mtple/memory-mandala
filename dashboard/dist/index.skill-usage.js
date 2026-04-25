@@ -230,11 +230,19 @@
     const load = hooks.useCallback(async () => {
       setError(null);
       try {
-        const [s, c] = await Promise.all([fetchJSON(`${API}/state`), fetchJSON(`${API}/current`)]);
-        setState(s); setCurrent(c);
+        const s = await fetchJSON(`${API}/state`);
+        setState(s);
+        setCurrent(s.genome);
+        setLoading(false);
+        fetchJSON(`${API}/current`).then((c) => {
+          if (c && c.structure && c.structure.sections && c.structure.sections.some((section) => section.summary_text)) {
+            setCurrent(c);
+          }
+        }).catch(() => {
+          // Snapshot loading is non-critical; the live genome is enough to render the map.
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-      } finally {
         setLoading(false);
       }
     }, []);
