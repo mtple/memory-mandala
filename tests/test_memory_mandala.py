@@ -188,3 +188,34 @@ def test_reads_hermes_memories_directory_and_builds_descriptive_labels(tmp_path)
     assert "lowercase" in sections["preferences"]["summary_text"] or "HTML" in sections["preferences"]["summary_text"]
     assert "Never send API keys" in sections["safety"]["summary_text"]
     assert genome["structure"]["art_layers"]
+
+
+def test_skills_are_ranked_by_session_usage(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "skills" / "github" / "github-pr-workflow").mkdir(parents=True)
+    (home / "skills" / "research" / "arxiv").mkdir(parents=True)
+    (home / "skills" / "creative" / "pixel-art").mkdir(parents=True)
+    (home / "sessions").mkdir(parents=True)
+    for name in ["github-pr-workflow", "arxiv", "pixel-art"]:
+        (home / "skills" / ("github" if name.startswith("github") else "research" if name == "arxiv" else "creative") / name / "SKILL.md").write_text(
+            f"---\nname: {name}\n---\n# {name}\n", encoding="utf-8"
+        )
+    (home / "sessions" / "session_one.json").write_text(
+        "github-pr-workflow github-pr-workflow arxiv", encoding="utf-8"
+    )
+    (home / "sessions" / "session_two.json").write_text(
+        "github-pr-workflow pixel-art", encoding="utf-8"
+    )
+
+    genome = api.compute_memory_genome(home)
+    skills = genome["skills"]
+    skill_section = {section["id"]: section for section in genome["structure"]["sections"]}["skills"]
+
+    assert [skill["name"] for skill in skills[:3]] == ["github-pr-workflow", "arxiv", "pixel-art"]
+    assert skills[0]["usage_count"] == 3
+    assert skills[1]["usage_count"] == 1
+    assert skills[2]["usage_count"] == 1
+    assert skills[0]["usage_heat"] == 1.0
+    assert skill_section["items"][0]["usage_count"] == 3
+    assert "most used" in skill_section["summary_text"].lower()

@@ -147,6 +147,25 @@ def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
     return sources
 
 
+def _skill_usage_counts(home: Path, skill_names: list[str]) -> dict[str, int]:
+    """Count best-effort skill mentions in saved session transcripts."""
+    sessions_dir = home / "sessions"
+    counts = {name: 0 for name in skill_names}
+    if not sessions_dir.exists():
+        return counts
+    patterns = {name: re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(name)}(?![A-Za-z0-9_-])", re.I) for name in skill_names}
+    paths = sorted(set(list(sessions_dir.glob("session_*.json")) + list(sessions_dir.glob("*.jsonl")) + list(sessions_dir.glob("*.json"))))
+    for path in paths:
+        if not path.is_file():
+            continue
+        text = _safe_read(path, 250_000)
+        if not text:
+            continue
+        for name, pattern in patterns.items():
+            counts[name] += len(pattern.findall(text))
+    return counts
+
+
 def _collect_skills(home: Path) -> list[dict[str, Any]]:
     skills_dir = home / "skills"
     skills: list[dict[str, Any]] = []
@@ -164,7 +183,13 @@ def _collect_skills(home: Path) -> list[dict[str, Any]]:
             "hash": _sha(text),
             "chars": len(text),
         })
-    return skills
+    usage = _skill_usage_counts(home, [skill["name"] for skill in skills])
+    max_usage = max(usage.values() or [0])
+    for skill in skills:
+        count = usage.get(skill["name"], 0)
+        skill["usage_count"] = count
+        skill["usage_heat"] = round(count / max_usage, 3) if max_usage else 0.0
+    return sorted(skills, key=lambda s: (-s.get("usage_count", 0), s["name"]))
 
 
 def _collect_session_summary() -> dict[str, Any]:
@@ -227,9 +252,21 @@ def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]
         count = len(skills) if key == "skills" else int(categories.get(key, 0))
         status = "present" if count > 0 else "gap"
         if key == "skills":
-            items = [{"source": "skills", "text": skill.get("name", "unnamed skill")[:180]} for skill in skills[:5]]
-            examples = ", ".join(item["text"] for item in items[:4])
-            summary_text = f"{len(skills)} reusable workflows installed" + (f", including {examples}." if examples else ".")
+            items = [
+                {
+                    "source": "skills",
+                    "text": skill.get("name", "unnamed skill")[:180],
+                    "usage_count": skill.get("usage_count", 0),
+                    "usage_heat": skill.get("usage_heat", 0.0),
+                }
+                for skill in skills[:8]
+            ]
+            used = [item for item in items if item.get("usage_count", 0) > 0]
+            examples = ", ".join(f"{item['text']} ({item['usage_count']} uses)" for item in (used or items)[:4])
+            if used:
+                summary_text = f"{len(skills)} reusable workflows installed; most used: {examples}."
+            else:
+                summary_text = f"{len(skills)} reusable workflows installed; no usage history found yet."
         else:
             items = _evidence_items(key, sources)
             summary_text = items[0]["text"] if items else recommendation
