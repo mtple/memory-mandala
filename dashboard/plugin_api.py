@@ -211,6 +211,8 @@ def _is_valuable_fact(text: str) -> bool:
     boilerplate = [
         "background process", "matched watch pattern", "command:", "output:", "exit code", "traceback",
         "browser screenshot", "captcha", "verification challenge", "hermes web ui", "tool_calls",
+        "system note:", "previous turn was interrupted", "process the tool results above",
+        "please process the tool results", "continue with the task", "address the user's new message",
         '"success"', '"error"', '"action"', '"target"', '"path"', '"content"', "result_type", "line_num",
         "doctype html", "function (", "const ", "var ", "import ", "def ", "class ", "pytest",
     ]
@@ -273,7 +275,7 @@ def _collect_session_sources(home: Path) -> list[dict[str, Any]]:
             text = "\n".join(fragments)
             sources.append({
                 "path": str(path),
-                "name": f"session:{path.name}",
+                "name": "recent session memory",
                 "kind": "session",
                 "chars": len(text),
                 "hash": _sha(text),
