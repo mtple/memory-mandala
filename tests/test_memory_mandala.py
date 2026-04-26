@@ -304,10 +304,21 @@ def test_active_frontend_bundle_has_dynamic_side_pane_not_popup():
     bundle = (repo / "dashboard" / manifest["entry"]).read_text(encoding="utf-8")
 
     assert "function DynamicInsightPane" in bundle
-    assert "right pane follows hover" in bundle
+    assert "live detail" in bundle
     assert "evidence rows" in bundle
     assert "function Overlay" not in bundle
     assert "setPinned" not in bundle
+
+
+def test_active_frontend_bundle_uses_one_left_pane_without_duplicate_header():
+    repo = Path(__file__).resolve().parents[1]
+    manifest = json.loads((repo / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+    bundle = (repo / "dashboard" / manifest["entry"]).read_text(encoding="utf-8")
+
+    assert "mm-left-pane" in bundle
+    assert "mm-pane-intro" in bundle
+    assert "evidence map" not in bundle
+    assert "expanded source-backed facts" not in bundle
 
 
 def test_large_memory_graph_expands_valuable_non_repetitive_data(tmp_path):
