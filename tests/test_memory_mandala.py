@@ -295,3 +295,60 @@ def test_memory_graph_omits_weak_single_term_connections(tmp_path):
     assert all(len(conn["shared_terms"]) >= 2 for conn in graph["connections"])
     assert not any(conn["shared_terms"] == ["banana"] for conn in graph["connections"])
     assert any({"tortoise", "farcaster"}.issubset(set(conn["shared_terms"])) for conn in graph["connections"])
+
+
+
+def test_large_memory_graph_expands_valuable_non_repetitive_data(tmp_path):
+    api = load_plugin_api()
+    home = tmp_path / "hermes"
+    (home / "memories").mkdir(parents=True)
+    (home / "memory").mkdir(parents=True)
+    (home / "sessions").mkdir(parents=True)
+    (home / "skills" / "ops").mkdir(parents=True)
+
+    durable_lines = []
+    for i in range(90):
+        lane = ["radio", "contracts", "posting", "analytics", "collectors", "artists"][i % 6]
+        durable_lines.append(
+            f"Project signal {i}: Tortoise Farcaster {lane} workflow tracks catalog-{i} evidence, collector intent, artist context, and Base operations."
+        )
+    (home / "memories" / "MEMORY.md").write_text("\n".join(durable_lines), encoding="utf-8")
+
+    daily_lines = []
+    for i in range(70):
+        lane = ["safety", "email", "dashboard", "metrics", "strategy", "skills", "community"][i % 7]
+        daily_lines.append(
+            f"Recent learning {i}: Matt and tortOS refined Tortoise {lane} practice with Farcaster review, accurate source evidence, and non repetitive decisions."
+        )
+    (home / "memory" / "2026-04-26.md").write_text("\n".join(daily_lines), encoding="utf-8")
+
+    session_payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Session insight {i}: memory mandala should expose Tortoise Farcaster exploration node-{i} with accurate source detail and category drilldown.",
+            }
+            for i in range(50)
+        ]
+    }
+    (home / "sessions" / "session_large.json").write_text(json.dumps(session_payload), encoding="utf-8")
+
+    for i in range(30):
+        skill_dir = home / "skills" / "ops" / f"workflow-{i}"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            f"---\nname: workflow-{i}\ndescription: Tortoise Farcaster workflow {i} verifies source evidence, category exploration, and reusable operations.\n---\n# Workflow {i}\n",
+            encoding="utf-8",
+        )
+
+    graph = api.compute_memory_genome(home)["structure"]["memory_graph"]
+    texts = [node["text"] for node in graph["nodes"]]
+
+    assert len(graph["nodes"]) >= 120
+    assert len(graph["connections"]) >= 120
+    assert len(graph["hubs"]) >= 12
+    assert len(texts) == len(set(texts))
+    assert all(len(conn["shared_terms"]) >= 2 for conn in graph["connections"])
+    assert all(conn["evidence"] and conn["source"] == "shared-memory" for conn in graph["connections"])
+    assert any(node.get("source_kind") == "session" for node in graph["nodes"])
+    assert any(node.get("kind") == "skills" for node in graph["nodes"])

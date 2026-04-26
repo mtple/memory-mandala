@@ -39,11 +39,20 @@ router = APIRouter()
 PLUGIN_NAME = "memory-mandala"
 MAX_TEXT_CHARS = 220_000
 MAX_TIMELINE = 48
+MAX_EXTRACTED_FACTS = 1200
+MAX_GRAPH_NODES = 180
+MAX_GRAPH_LINKS = 420
+MAX_GRAPH_HUBS = 60
+MAX_SKILL_FACTS = 160
+MAX_SESSION_SOURCES = 80
 STOPWORDS = {
     "the", "and", "for", "that", "with", "this", "from", "have", "will", "your",
     "user", "agent", "memory", "hermes", "should", "when", "what", "were", "been",
     "into", "their", "there", "about", "which", "would", "could", "than", "then",
-    "them", "they", "you", "are", "but", "not", "all", "can", "has", "was", "use",
+    "them", "they", "you", "are", "but", "not", "all", "can", "has", "was", "use", "using",
+    "file", "files", "line", "lines", "content", "contents", "source", "sources",
+    "button", "click", "page", "view", "views", "pane", "panes", "section", "sections",
+    "create", "need", "home", "ubuntu", "path", "code", "local", "current", "latest",
 }
 CATEGORY_RULES = {
     "identity": ["identity", "role", "name", "called", "pronouns", "timezone", "founder", "operator"],
@@ -103,6 +112,173 @@ def _extract_keywords(text: str, limit: int = 18) -> list[str]:
     return [word for word, _count in counts.most_common(limit)]
 
 
+def _frontmatter_value(text: str, key: str) -> str:
+    match = re.search(rf"^{re.escape(key)}:\s*(.+)$", text, flags=re.M | re.I)
+    return match.group(1).strip().strip('"\'') if match else ""
+
+
+def _plain_text(value: Any, max_chars: int = 900) -> str:
+    text = str(value or "")
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+def _json_text_fragments(data: Any, limit: int = 260) -> list[str]:
+    """Extract useful prose from structured JSON without dumping raw config/tool noise."""
+    useful_keys = {
+        "title", "summary", "preview", "text", "content", "message", "prompt", "response",
+        "body", "description", "name", "role", "notes", "decision", "reason", "topic",
+    }
+    noisy_keys = {
+        "token", "api_key", "authorization", "headers", "cookie", "stderr", "stdout", "traceback",
+        "screenshot", "image", "base64", "embedding", "vector", "raw", "html", "svg",
+    }
+    fragments: list[str] = []
+
+    def walk(obj: Any, key: str = "", depth: int = 0) -> None:
+        if len(fragments) >= limit or depth > 8:
+            return
+        key_l = key.lower()
+        if key_l in noisy_keys or any(noise in key_l for noise in noisy_keys):
+            return
+        if isinstance(obj, str):
+            if key_l and key_l not in useful_keys and len(obj) > 220:
+                return
+            clean = _plain_text(obj)
+            if _is_valuable_fact(clean):
+                fragments.append(clean)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                walk(v, str(k), depth + 1)
+                if len(fragments) >= limit:
+                    break
+        elif isinstance(obj, list):
+            for item in obj[:400]:
+                walk(item, key, depth + 1)
+                if len(fragments) >= limit:
+                    break
+
+    walk(data)
+    return _unique_strings(fragments, limit)
+
+
+def _unique_strings(items: list[str], limit: int) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        key = _normalize_fact_key(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_fact_key(text: str) -> str:
+    text = re.sub(r"[`*_>#\[\]()]", " ", text.lower())
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", " ", text)
+    text = re.sub(r"[^a-z0-9@._ -]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:260]
+
+
+def _is_near_duplicate(key: str, seen: set[str]) -> bool:
+    if key in seen:
+        return True
+    key_terms = set(_tokenize(key))
+    if len(key_terms) < 4:
+        return False
+    for other in list(seen)[-900:]:
+        other_terms = set(_tokenize(other))
+        if len(other_terms) < 4:
+            continue
+        overlap = len(key_terms & other_terms) / max(1, len(key_terms | other_terms))
+        if overlap >= 0.94 or (len(key) > 80 and len(other) > 80 and (key in other or other in key)):
+            return True
+    return False
+
+
+def _is_valuable_fact(text: str) -> bool:
+    clean = _plain_text(text, 1200)
+    if len(clean) < 18 or len(clean) > 700:
+        return False
+    lower = clean.lower()
+    boilerplate = [
+        "background process", "matched watch pattern", "command:", "output:", "exit code", "traceback",
+        "browser screenshot", "captcha", "verification challenge", "hermes web ui", "tool_calls",
+        '"success"', '"error"', "result_type", "line_num",
+        "doctype html", "function (", "const ", "var ", "import ", "def ", "class ", "pytest",
+    ]
+    if any(term in lower for term in boilerplate):
+        return False
+    if lower.count("{") + lower.count("}") + lower.count("[") + lower.count("]") > 6:
+        return False
+    tokens = _tokenize(clean)
+    if len(set(tokens)) < 2:
+        return False
+    return True
+
+
+def _fact_quality(text: str, source_kind: str, terms: list[str]) -> float:
+    lower = text.lower()
+    score = 0.0
+    score += min(16, len(set(terms)) * 1.7)
+    score += 5 if 45 <= len(text) <= 240 else 1
+    score += 4 if any(ch.isupper() for ch in text[1:]) else 0
+    score += 3 if re.search(r"@[a-z0-9_.-]+|\b[A-Z][A-Za-z0-9_.-]{3,}\b", text) else 0
+    score += 4 if any(needle in lower for needles in CATEGORY_RULES.values() for needle in needles) else 0
+    score += {"memory": 12, "user": 12, "daily": 8, "session": 5, "skill": 6}.get(source_kind, 4)
+    score -= 5 if len(text) > 360 else 0
+    return round(score, 3)
+
+
+def _collect_session_sources(home: Path) -> list[dict[str, Any]]:
+    sessions_dir = home / "sessions"
+    if not sessions_dir.exists():
+        return []
+    paths = sorted(
+        [p for p in sessions_dir.glob("**/*") if p.is_file() and p.suffix.lower() in {".json", ".jsonl", ".md", ".txt"}],
+        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+        reverse=True,
+    )[:MAX_SESSION_SOURCES]
+    sources: list[dict[str, Any]] = []
+    for path in paths:
+        raw = _safe_read(path, 60_000)
+        if not raw:
+            continue
+        fragments: list[str] = []
+        if path.suffix.lower() == ".jsonl":
+            for line in raw.splitlines()[:500]:
+                try:
+                    fragments.extend(_json_text_fragments(json.loads(line), limit=12))
+                except Exception:
+                    continue
+        elif path.suffix.lower() == ".json":
+            try:
+                fragments.extend(_json_text_fragments(json.loads(raw), limit=90))
+            except Exception:
+                fragments.extend([line.strip() for line in raw.splitlines() if _is_valuable_fact(line.strip())][:60])
+        else:
+            fragments.extend([line.strip().lstrip("-•* ") for line in raw.splitlines() if _is_valuable_fact(line.strip())][:90])
+        fragments = _unique_strings(fragments, 110)
+        if fragments:
+            text = "\n".join(fragments)
+            sources.append({
+                "path": str(path),
+                "name": f"session:{path.name}",
+                "kind": "session",
+                "chars": len(text),
+                "hash": _sha(text),
+                "text": text,
+            })
+    return sources
+
+
 def _category_counts(text: str) -> dict[str, int]:
     text = re.sub(r"^_?Last updated:.*$", "", text, flags=re.I | re.M)
     lowered = text.lower()
@@ -138,15 +314,25 @@ def _collect_memory_sources(home: Path) -> list[dict[str, Any]]:
             continue
         seen.add(path)
         text = _safe_read(path)
-        if text:
-            sources.append({
-                "path": str(path),
-                "name": path.name,
-                "kind": "daily" if path.parent.name == "memory" else path.stem.lower(),
-                "chars": len(text),
-                "hash": _sha(text),
-                "text": text,
-            })
+        if not text:
+            continue
+        kind = "daily" if path.parent.name == "memory" else path.stem.lower()
+        if path.suffix.lower() == ".json":
+            try:
+                fragments = _json_text_fragments(json.loads(text), limit=180)
+                if fragments:
+                    text = "\n".join(fragments)
+            except Exception:
+                pass
+        sources.append({
+            "path": str(path),
+            "name": path.name,
+            "kind": kind,
+            "chars": len(text),
+            "hash": _sha(text),
+            "text": text,
+        })
+    sources.extend(_collect_session_sources(home))
     return sources
 
 
@@ -206,8 +392,15 @@ def _collect_skills(home: Path) -> list[dict[str, Any]]:
         match = re.search(r"^name:\s*([^\n]+)", text, re.M)
         if match:
             name = match.group(1).strip().strip('"\'')
+        description = _frontmatter_value(text, "description")
+        if not description:
+            description_match = re.search(r"^#\s+.+?\n+([^#\n][^\n]{20,500})", text, flags=re.M)
+            description = description_match.group(1).strip() if description_match else ""
+        headings = [h.strip() for h in re.findall(r"^#{1,3}\s+(.+)$", text, flags=re.M)[:8]]
         skills.append({
             "name": name,
+            "description": _plain_text(description, 420),
+            "headings": headings,
             "path": str(skill_md),
             "hash": _sha(text),
             "chars": len(text),
@@ -271,7 +464,7 @@ def _classify_fact(text: str) -> str:
     return best
 
 
-def _memory_terms(text: str, limit: int = 12) -> list[str]:
+def _memory_terms(text: str, limit: int = 16) -> list[str]:
     """Extract connection terms specific enough to make a real memory link."""
     raw_terms = _tokenize(text)
     generic = STOPWORDS | {
@@ -279,12 +472,23 @@ def _memory_terms(text: str, limit: int = 12) -> list[str]:
         "workflow", "workflows", "dashboard", "plugin", "memory", "recent", "learned",
         "identity", "role", "rules", "security", "never", "send", "review", "activity",
         "uses", "built", "created", "updated", "fixed", "operator", "platform", "system",
-        "data", "engagement", "works", "scored", "likes", "recast", "replies",
+        "data", "engagement", "works", "scored", "likes", "recast", "replies", "strong",
+        "source", "sources", "facts", "fact", "node", "nodes", "user", "assistant",
+        "message", "messages", "telegram", "process", "browser", "dashboard", "button",
+        "skill", "skills", "file", "files", "using", "source", "sources", "section", "sections",
+        "create", "need", "home", "ubuntu", "path", "code", "local", "current", "latest",
+    }
+    aliases = {
+        "tortoise.studio": "tortoise",
+        "tortmusic.eth": "tortmusic",
+        "farcaster/base": "farcaster",
     }
     terms = []
     for term in raw_terms:
-        normalized = term.strip("._-").lower()
+        normalized = aliases.get(term.strip("._-").lower(), term.strip("._-").lower())
         if len(normalized) < 4 or normalized in generic:
+            continue
+        if re.fullmatch(r"\d+", normalized):
             continue
         if normalized not in terms:
             terms.append(normalized)
@@ -293,94 +497,157 @@ def _memory_terms(text: str, limit: int = 12) -> list[str]:
     return terms
 
 
-def _extract_memory_facts(sources: list[dict[str, Any]], skills: list[dict[str, Any]], limit: int = 72) -> list[dict[str, Any]]:
-    """Turn the actual memory system into clickable facts.
+def _candidate_chunks(text: str) -> list[str]:
+    chunks: list[str] = []
+    for line in text.splitlines():
+        line = line.strip().lstrip("-•* ")
+        if not line:
+            continue
+        sentence_parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", line) if part.strip()]
+        chunks.extend(sentence_parts or [line])
+    if len(chunks) < 4:
+        chunks.extend(re.split(r"(?<=[.!?])\s+", text))
+    return chunks
 
-    Facts are not abstract topic buckets. They are lines/sentences from the memory files
-    and skill names, with entity-like terms used later to form evidence-backed links.
-    """
-    facts: list[dict[str, Any]] = []
+
+def _clean_fact(raw: str) -> str:
+    raw = " ".join(raw.strip().lstrip("-•* ").split())
+    raw = re.sub(r"^_?Last updated:.*$", "", raw, flags=re.I)
+    stripped = re.sub(r"^(?:[#>*\s-]*)(?:[A-Za-z &/]+):\s*", "", raw).strip()
+    if len(stripped) >= 18:
+        raw = stripped
+    return _plain_text(raw, 420)
+
+
+def _extract_memory_facts(sources: list[dict[str, Any]], skills: list[dict[str, Any]], limit: int = MAX_EXTRACTED_FACTS) -> list[dict[str, Any]]:
+    """Turn the actual memory system into many clickable, deduped, evidence-backed facts."""
+    candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in sources:
-        chunks = re.split(r"(?<=[.!?])\s+|\n+", source.get("text", ""))
-        for chunk in chunks:
-            raw = " ".join(chunk.strip().lstrip("-•* ").split())
-            if not raw or re.match(r"^_?Last updated:", raw, re.I):
+        source_kind = source.get("kind", "memory")
+        for chunk in _candidate_chunks(source.get("text", "")):
+            clean = _clean_fact(chunk)
+            if not _is_valuable_fact(clean):
                 continue
-            clean = re.sub(r"^(?:[#>*\s-]*)(?:[A-Za-z &/]+):\s*", "", raw).strip()
-            if len(clean) < 8:
-                continue
-            key = clean.lower()
-            if key in seen:
+            key = _normalize_fact_key(clean)
+            if _is_near_duplicate(key, seen):
                 continue
             terms = _memory_terms(clean)
-            category = _classify_fact(raw)
-            fact = {
-                "id": _sha(f"{source.get('name')}:{clean}")[:12],
+            category = _classify_fact(chunk)
+            if not terms and category != "identity":
+                continue
+            quality = _fact_quality(clean, source_kind, terms)
+            candidates.append({
+                "id": _sha(f"{source.get('path')}:{clean}")[:12],
                 "kind": category,
                 "source": source.get("name", "memory"),
                 "source_path": source.get("path", ""),
-                "text": clean[:220],
+                "text": clean[:360],
                 "terms": terms,
-                "weight": max(1, min(12, len(terms))),
-            }
-            facts.append(fact)
+                "weight": max(1, min(18, int(round(quality / 3)))),
+                "quality": quality,
+                "source_kind": source_kind,
+            })
             seen.add(key)
-            if len(facts) >= limit:
-                break
-        if len(facts) >= limit:
-            break
 
-    for skill in skills[:24]:
+    for skill in skills[:MAX_SKILL_FACTS]:
         name = skill.get("name", "unnamed skill")
-        terms = _memory_terms(name.replace("-", " "))
-        facts.append({
-            "id": _sha(f"skill:{name}")[:12],
+        description = skill.get("description") or ""
+        headings = ", ".join(skill.get("headings", [])[:4])
+        text = _plain_text(f"{name}: {description or headings or 'installed Hermes skill'}", 360)
+        if not _is_valuable_fact(text):
+            text = name
+        key = _normalize_fact_key(f"skill {text}")
+        if _is_near_duplicate(key, seen):
+            continue
+        terms = _memory_terms(f"{name} {description} {headings}") or _memory_terms(name.replace("-", " ")) or [name.lower()]
+        quality = _fact_quality(text, "skill", terms) + int(skill.get("usage_heat", 0) * 8)
+        candidates.append({
+            "id": _sha(f"skill:{name}:{description}")[:12],
             "kind": "skills",
             "source": "SKILL.md",
             "source_path": skill.get("path", ""),
-            "text": name,
-            "terms": terms or [name.lower()],
-            "weight": max(1, int(skill.get("usage_heat", 0) * 12) or 1),
+            "text": text[:360],
+            "terms": terms[:16],
+            "weight": max(1, min(18, int(round(quality / 3)))),
+            "quality": round(quality, 3),
             "usage_count": skill.get("usage_count", 0),
             "usage_heat": skill.get("usage_heat", 0.0),
+            "source_kind": "skill",
         })
-    return facts
+        seen.add(key)
+
+    # Preserve category diversity while still ranking by quality.
+    by_kind: dict[str, list[dict[str, Any]]] = {key: [] for key in CATEGORY_RULES}
+    for fact in sorted(candidates, key=lambda f: (-f.get("quality", 0), f.get("source", ""), f.get("text", ""))):
+        by_kind.setdefault(fact.get("kind", "projects"), []).append(fact)
+    ordered: list[dict[str, Any]] = []
+    per_kind_floor = max(8, min(45, limit // 10))
+    for kind in ["identity", "preferences", "projects", "skills", "safety", "recent"]:
+        ordered.extend(by_kind.get(kind, [])[:per_kind_floor])
+    added = {fact["id"] for fact in ordered}
+    for fact in sorted(candidates, key=lambda f: (-f.get("quality", 0), f.get("source", ""), f.get("text", ""))):
+        if fact["id"] not in added:
+            ordered.append(fact)
+            added.add(fact["id"])
+        if len(ordered) >= limit:
+            break
+    return ordered[:limit]
 
 
-def _build_memory_graph(facts: list[dict[str, Any]], limit: int = 36) -> dict[str, Any]:
-    nodes = sorted(facts, key=lambda f: (-int(f.get("weight", 1)), f.get("source", ""), f.get("text", "")))[:limit]
+def _build_memory_graph(facts: list[dict[str, Any]], limit: int = MAX_GRAPH_NODES) -> dict[str, Any]:
+    nodes = sorted(facts, key=lambda f: (-float(f.get("quality", f.get("weight", 1))), f.get("source", ""), f.get("text", "")))[:limit]
     connections: list[dict[str, Any]] = []
-    for i, a in enumerate(nodes):
-        terms_a = set(a.get("terms", []))
-        if not terms_a:
+    term_to_nodes: dict[str, list[dict[str, Any]]] = {}
+    for node in nodes:
+        for term in set(node.get("terms", [])):
+            term_to_nodes.setdefault(term, []).append(node)
+
+    seen_pairs: set[str] = set()
+    for term, term_nodes in term_to_nodes.items():
+        if len(term_nodes) < 2 or len(term_nodes) > 80:
             continue
-        for b in nodes[i + 1:]:
-            terms_b = set(b.get("terms", []))
-            shared = sorted(terms_a & terms_b)
-            if len(shared) < 2:
-                continue
-            weight = len(shared) + (1 if a.get("kind") != b.get("kind") else 0)
-            evidence = [a.get("text", ""), b.get("text", "")]
-            connections.append({
-                "id": _sha(f"{a['id']}:{b['id']}:{','.join(shared)}")[:12],
-                "from": a["id"],
-                "to": b["id"],
-                "from_kind": a.get("kind"),
-                "to_kind": b.get("kind"),
-                "from_label": a.get("text", "")[:80],
-                "to_label": b.get("text", "")[:80],
-                "shared_terms": shared[:6],
-                "weight": weight,
-                "reason": "shared terms: " + ", ".join(shared[:4]),
-                "source": "shared-memory",
-                "evidence": evidence,
-            })
+        ranked = sorted(term_nodes, key=lambda f: -float(f.get("quality", f.get("weight", 1))))[:42]
+        for i, a in enumerate(ranked):
+            terms_a = set(a.get("terms", []))
+            for b in ranked[i + 1:]:
+                pair = ":".join(sorted([a["id"], b["id"]]))
+                if pair in seen_pairs:
+                    continue
+                terms_b = set(b.get("terms", []))
+                shared = sorted(terms_a & terms_b)
+                if len(shared) < 2:
+                    continue
+                seen_pairs.add(pair)
+                weight = len(shared) + (1 if a.get("kind") != b.get("kind") else 0)
+                weight += min(3, int((float(a.get("quality", 0)) + float(b.get("quality", 0))) / 20))
+                evidence = [a.get("text", ""), b.get("text", "")]
+                connections.append({
+                    "id": _sha(f"{a['id']}:{b['id']}:{','.join(shared)}")[:12],
+                    "from": a["id"],
+                    "to": b["id"],
+                    "from_kind": a.get("kind"),
+                    "to_kind": b.get("kind"),
+                    "from_label": a.get("text", "")[:100],
+                    "to_label": b.get("text", "")[:100],
+                    "shared_terms": shared[:8],
+                    "weight": weight,
+                    "reason": "shared terms: " + ", ".join(shared[:5]),
+                    "source": "shared-memory",
+                    "evidence": evidence,
+                })
+                if len(connections) >= MAX_GRAPH_LINKS * 3:
+                    break
+            if len(connections) >= MAX_GRAPH_LINKS * 3:
+                break
+        if len(connections) >= MAX_GRAPH_LINKS * 3:
+            break
+
     connections.sort(key=lambda c: (-c["weight"], c["from_label"], c["to_label"]))
-    connections = connections[: min(40, len(connections))]
+    connections = connections[: min(MAX_GRAPH_LINKS, len(connections))]
     term_counts = Counter(term for node in nodes for term in node.get("terms", []))
-    hubs = [{"term": term, "count": count} for term, count in term_counts.most_common(12) if count > 1]
-    return {"nodes": nodes, "connections": connections, "hubs": hubs}
+    hubs = [{"term": term, "count": count} for term, count in term_counts.most_common(MAX_GRAPH_HUBS) if count > 1]
+    return {"nodes": nodes, "connections": connections, "hubs": hubs, "total_facts": len(facts)}
 
 
 def build_memory_structure(genome: dict[str, Any], sources: list[dict[str, Any]]) -> dict[str, Any]:
