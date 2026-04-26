@@ -321,6 +321,17 @@ def test_active_frontend_bundle_uses_one_left_pane_without_duplicate_header():
     assert "expanded source-backed facts" not in bundle
 
 
+def test_active_styles_use_full_left_pane_without_tiny_text_windows():
+    repo = Path(__file__).resolve().parents[1]
+    manifest = json.loads((repo / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+    styles = (repo / "dashboard" / manifest["css"]).read_text(encoding="utf-8")
+
+    assert "v2.0.0: full-pane reading layout" in styles
+    assert "grid-template-columns: 1fr" in styles
+    assert ".mm-left-pane .mm-dynamic-section.evidence" in styles
+    assert "max-height: none !important" in styles
+
+
 def test_large_memory_graph_expands_valuable_non_repetitive_data(tmp_path):
     api = load_plugin_api()
     home = tmp_path / "hermes"
