@@ -211,12 +211,15 @@ def _is_valuable_fact(text: str) -> bool:
     boilerplate = [
         "background process", "matched watch pattern", "command:", "output:", "exit code", "traceback",
         "browser screenshot", "captcha", "verification challenge", "hermes web ui", "tool_calls",
-        '"success"', '"error"', "result_type", "line_num",
+        '"success"', '"error"', '"action"', '"target"', '"path"', '"content"', "result_type", "line_num",
         "doctype html", "function (", "const ", "var ", "import ", "def ", "class ", "pytest",
     ]
     if any(term in lower for term in boilerplate):
         return False
-    if lower.count("{") + lower.count("}") + lower.count("[") + lower.count("]") > 6:
+    stripped = clean.strip()
+    if (stripped.startswith("{") or stripped.startswith("[")) and ":" in stripped[:120]:
+        return False
+    if lower.count("{") + lower.count("}") + lower.count("[") + lower.count("]") > 4:
         return False
     tokens = _tokenize(clean)
     if len(set(tokens)) < 2:
