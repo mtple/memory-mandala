@@ -298,14 +298,17 @@ def test_memory_graph_omits_weak_single_term_connections(tmp_path):
 
 
 
-def test_active_frontend_bundle_has_dynamic_side_pane_not_popup():
+def test_active_frontend_bundle_has_single_readable_inspector_not_old_workbench():
     repo = Path(__file__).resolve().parents[1]
     manifest = json.loads((repo / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
     bundle = (repo / "dashboard" / manifest["entry"]).read_text(encoding="utf-8")
 
-    assert "function DynamicInsightPane" in bundle
-    assert "live detail" in bundle
-    assert "evidence rows" in bundle
+    assert "function UnifiedInspector" in bundle
+    assert "inspect one memory at a time" in bundle
+    assert "primary evidence" in bundle
+    assert "memory data workbench" not in bundle
+    assert "strong links" not in bundle
+    assert "term hubs" not in bundle
     assert "function Overlay" not in bundle
     assert "setPinned" not in bundle
 
@@ -326,10 +329,12 @@ def test_active_styles_use_full_left_pane_without_tiny_text_windows():
     manifest = json.loads((repo / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
     styles = (repo / "dashboard" / manifest["css"]).read_text(encoding="utf-8")
 
-    assert "v2.0.0: full-pane reading layout" in styles
-    assert "grid-template-columns: 1fr" in styles
-    assert ".mm-left-pane .mm-dynamic-section.evidence" in styles
-    assert "max-height: none !important" in styles
+    assert "v2.1.0: qa rebuild readable app" in styles
+    assert "grid-template-columns: minmax(420px, 42vw) minmax(0, 1fr)" in styles
+    assert "font-size: 15px" in styles
+    assert ".mm-node text { opacity: 0; }" in styles
+    assert ".mm-node:hover text" in styles
+    assert "max-height" not in styles
 
 
 def test_large_memory_graph_expands_valuable_non_repetitive_data(tmp_path):
